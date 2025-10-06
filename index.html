@@ -1,33 +1,27 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
-    />
-    <meta name="theme-color" content="#0B0B0C" />
-    <title>taedal v3</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Taedal v3</title>
 
-    <!-- App icons -->
+    <base href="/" />  <!-- ✅ important for client-side routing -->
+
     <link rel="icon" href="/brand/taedal-logo.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/brand/taedal-logo.svg" />
 
-    <!-- Runtime configuration (read by src/lib/config.ts) -->
     <script>
       window.__CONFIG__ = {
         API_BASE: "https://taedal-v3.onrender.com",
         NFT_ADDRESS: "0xD8e2F4e3911d0AB338a77AF57C39Df048B45F1ae",
-        CHAIN_ID: 11155111,                    // Sepolia
+        CHAIN_ID: 11155111,
         SUPABASE_URL: "https://hfkipjztnhosxdaocsxs.supabase.co",
-        SUPABASE_ANON_KEY:
-          "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhma2lwanp0bmhvc3hkYW9jc3hzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk2ODEzOTAsImV4cCI6MjA3NTI1NzM5MH0.OglogjqUg3UPV_t_xxeUR9mOn_WBmWF-o5XLqucUw64",
+        SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhma2lwanp0bmhvc3hkYW9jc3hzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk2ODEzOTAsImV4cCI6MjA3NTI1NzM5MH0.OglogjqUg3UPV_t_xxeUR9mOn_WBmWF-o5XLqucUw64",
         DEFAULT_COVER_URL: "/brand/taedal-logo.svg",
         DEFAULT_AVATAR_URL: "/brand/taedal-logo.svg"
       };
     </script>
   </head>
-
   <body class="bg-bg text-text">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>

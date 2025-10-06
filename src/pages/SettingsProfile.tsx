@@ -86,11 +86,16 @@ export default function SettingsProfile() {
         username: username.toLowerCase(),
         display_name: displayName || null,
         bio: bio || null,
-        avatar_url: avatarUrl ? bust(avatarUrl) : null,
-        cover_url: coverUrl ? bust(coverUrl) : null,
+        avatar_url: avatarUrl || null,
+        cover_url: coverUrl || null,
         updated_at: new Date().toISOString(),
       }).eq('id', user.id)
       if (error) throw error
+
+      // 🔔 tell the app to refresh profile (navbar avatar etc.)
+      window.dispatchEvent(new Event('profile-updated'))
+
+      // go to public profile
       nav(`/@${username.toLowerCase()}`, { replace: true })
     } catch (e: any) {
       setErr(e.message || 'Failed to save profile')
