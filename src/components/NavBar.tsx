@@ -1,13 +1,11 @@
-// src/components/NavBar.tsx
 import { Link, useNavigate } from 'react-router-dom'
-import ConnectWallet from './ConnectWallet'
 import { useAuth } from '../state/AuthContext'
-import { supabase } from '../lib/supabase'
 import { useProfile } from '../hooks/useProfile'
+import { supabase } from '../lib/supabase'
+import { DEFAULT_AVATAR_URL } from '../lib/config'
 
-function avatarLabel(email?: string | null) {
-  if (!email) return 'U'
-  return email.charAt(0).toUpperCase()
+function avatarSrc(url?: string | null) {
+  return url && url.length > 0 ? url : DEFAULT_AVATAR_URL
 }
 
 export default function NavBar() {
@@ -20,12 +18,12 @@ export default function NavBar() {
     nav('/', { replace: true })
   }
 
-  const profileHref = profile?.username ? `/@${profile.username}` : '/settings'
+  const myProfileHref = profile?.username ? `/@${profile.username}` : '/account'
 
   return (
     <header className="sticky top-0 z-50 h-14 border-b border-border bg-bg/80 backdrop-blur">
       <div className="mx-auto flex h-full max-w-6xl items-center justify-between px-4">
-        {/* ✅ Logo -> landing page */}
+        {/* logo → home */}
         <Link to="/" className="flex items-center gap-3">
           <img src="/brand/taedal-logo.svg" className="h-6 w-6 rounded-md ring-1 ring-brand/40" alt="logo" />
           <span className="text-body font-medium tracking-wide">taedal</span>
@@ -34,7 +32,7 @@ export default function NavBar() {
         <nav className="flex items-center gap-6">
           <Link to="/community" className="text-sm text-text/80 hover:text-text">Community</Link>
           <Link to="/portfolio" className="text-sm text-text/80 hover:text-text">Portfolio</Link>
-          <Link to="/create" className="rounded-lg bg-brand/20 px-3 py-1.5 text-sm text-text ring-1 ring-brand/50 hover:bg-brand/30">
+          <Link to="/create" className="rounded-lg bg-brand/20 px-3 py-1.5 text-sm ring-1 ring-brand/50 hover:bg-brand/30">
             Create
           </Link>
 
@@ -47,23 +45,18 @@ export default function NavBar() {
             </div>
           ) : (
             <div className="flex items-center gap-3">
-              {/* ✅ Profile link smartly points to public profile or settings */}
-              <Link to={profileHref} className="flex items-center gap-2">
-                <div className="grid h-7 w-7 place-items-center overflow-hidden rounded-full bg-elev1 ring-1 ring-border">
-                  {profile?.avatar_url ? (
-                    <img src={profile.avatar_url} className="h-full w-full object-cover" alt="avatar" />
-                  ) : (
-                    <span className="text-xs">{avatarLabel(user.email)}</span>
-                  )}
-                </div>
+              {/* avatar → public profile (or account if username missing) */}
+              <Link to={myProfileHref} className="flex items-center gap-2">
+                <img
+                  src={avatarSrc(profile?.avatar_url)}
+                  className="h-7 w-7 rounded-full ring-1 ring-border object-cover"
+                  alt="me"
+                />
                 <span className="text-sm text-text/85 hover:text-text">Profile</span>
               </Link>
-
               <button onClick={onLogout} className="text-sm text-subtle hover:text-text">Logout</button>
             </div>
           )}
-
-          <ConnectWallet />
         </nav>
       </div>
     </header>
