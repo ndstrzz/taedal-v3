@@ -6,17 +6,9 @@ export type Profile = {
   id: string
   username: string | null
   display_name: string | null
-  role: 'artist' | 'collector' | 'brand' | null
   bio: string | null
-  country: string | null
-  currency: string | null
-  website: string | null
-  instagram: string | null
-  behance: string | null
-  twitter: string | null
   avatar_url: string | null
   cover_url: string | null
-  verified_at: string | null
 }
 
 export function useProfile() {
@@ -26,13 +18,35 @@ export function useProfile() {
 
   useEffect(() => {
     let mounted = true
-    ;(async () => {
+
+    async function load() {
       setLoading(true)
       if (!user) { setProfile(null); setLoading(false); return }
       const { data } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle()
       if (mounted) { setProfile((data as any) || null); setLoading(false) }
-    })()
-    return () => { mounted = false }
+    }
+
+    load()
+
+    if (!user) return
+
+    // listen for updates to my profile row
+    const channel = supabase
+      .channel('profile-self')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` },
+        (payload) => {
+          const newRow = payload.new as any
+          setProfile((prev) => ({ ...(prev || {} as any), ...newRow }))
+        }
+      )
+      .subscribe()
+
+    return () => {
+      mounted = false
+      supabase.removeChannel(channel)
+    }
   }, [user])
 
   return { profile, loading }

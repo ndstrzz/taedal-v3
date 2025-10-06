@@ -2,10 +2,11 @@ import { Link, useNavigate } from 'react-router-dom'
 import ConnectWallet from './ConnectWallet'
 import { useAuth } from '../state/AuthContext'
 import { useProfile } from '../hooks/useProfile'
+import { supabase } from '../lib/supabase'
+import { DEFAULT_AVATAR_URL } from '../lib/config'
 
-function avatarLabel(email?: string | null) {
-  if (!email) return 'U'
-  return email.charAt(0).toUpperCase()
+function avatarLetter(email?: string | null) {
+  return (email?.[0] || 'U').toUpperCase()
 }
 
 export default function NavBar() {
@@ -14,12 +15,12 @@ export default function NavBar() {
   const nav = useNavigate()
 
   async function onLogout() {
-    // we keep this here but most places call supabase.auth.signOut directly
+    await supabase.auth.signOut()
     nav('/', { replace: true })
-    location.reload()
   }
 
   const myProfileHref = profile?.username ? `/@${profile.username}` : '/settings'
+  const avatarSrc = profile?.avatar_url || DEFAULT_AVATAR_URL
 
   return (
     <header className="sticky top-0 z-50 h-14 border-b border-border bg-bg/80 backdrop-blur">
@@ -32,7 +33,10 @@ export default function NavBar() {
         <nav className="flex items-center gap-6">
           <Link to="/community" className="text-sm text-text/80 hover:text-text">Community</Link>
           <Link to="/portfolio" className="text-sm text-text/80 hover:text-text">Portfolio</Link>
-          <Link to="/create" className="rounded-lg bg-brand/20 px-3 py-1.5 text-sm text-text ring-1 ring-brand/50 hover:bg-brand/30">
+          <Link
+            to="/create"
+            className="rounded-lg bg-brand/20 px-3 py-1.5 text-sm text-text ring-1 ring-brand/50 hover:bg-brand/30"
+          >
             Create
           </Link>
 
@@ -44,19 +48,24 @@ export default function NavBar() {
               </Link>
             </div>
           ) : (
-            <div className="flex items-center gap-3">
-              <Link
-                to={myProfileHref}
-                className="flex items-center gap-2"
-                title="Profile"
-              >
-                <div className="grid h-7 w-7 place-items-center rounded-full bg-elev1 ring-1 ring-border">
-                  <span className="text-xs">{avatarLabel(user.email)}</span>
+            <div className="flex items-center gap-4">
+              {/* avatar → profile */}
+              <Link to={myProfileHref} className="flex items-center gap-2">
+                <div className="h-7 w-7 overflow-hidden rounded-full ring-1 ring-border bg-elev1">
+                  {avatarSrc ? (
+                    <img src={avatarSrc} className="h-full w-full object-cover" alt="avatar" />
+                  ) : (
+                    <div className="grid h-full w-full place-items-center text-xs">
+                      {avatarLetter(user.email)}
+                    </div>
+                  )}
                 </div>
                 <span className="text-sm text-text/85 hover:text-text">Profile</span>
               </Link>
 
-              <button onClick={onLogout} className="text-sm text-subtle hover:text-text">Logout</button>
+              <button onClick={onLogout} className="text-sm text-subtle hover:text-text">
+                Logout
+              </button>
             </div>
           )}
 
