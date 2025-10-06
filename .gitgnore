@@ -1,0 +1,38 @@
+# Node / build
+node_modules/
+dist/
+.cache/
+.tmp/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Env & local config
+.env
+.env.*.local
+*.local
+
+# Project-specific
+server/node_modules/
+server/dist/
+server/.env
+server/.env.local
+server/.vercel
+server/.render
+
+# Vite cache
+.vite/
+
+# Mac/Windows cruft
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Supabase (if using local)
+supabase/.temp

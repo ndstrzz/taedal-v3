@@ -1,0 +1,39 @@
+import { useEffect, useState } from 'react'
+import { supabase } from '../lib/supabase'
+import { useAuth } from '../state/AuthContext'
+
+export type Profile = {
+  id: string
+  username: string | null
+  display_name: string | null
+  role: 'artist' | 'collector' | 'brand' | null
+  bio: string | null
+  country: string | null
+  currency: string | null
+  website: string | null
+  instagram: string | null
+  behance: string | null
+  twitter: string | null
+  avatar_url: string | null
+  cover_url: string | null
+  verified_at: string | null
+}
+
+export function useProfile() {
+  const { user } = useAuth()
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      setLoading(true)
+      if (!user) { setProfile(null); setLoading(false); return }
+      const { data } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle()
+      if (mounted) { setProfile((data as any) || null); setLoading(false) }
+    })()
+    return () => { mounted = false }
+  }, [user])
+
+  return { profile, loading }
+}
