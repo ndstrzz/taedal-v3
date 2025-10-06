@@ -1,5 +1,5 @@
-import { createContext, useContext, useEffect, useState } from 'react'
-import type { ReactNode } from 'react'      // ✅ type-only import
+import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { supabase } from '../lib/supabase'
 import type { Session, User } from '@supabase/supabase-js'
 
@@ -15,7 +15,7 @@ const Ctx = createContext<AuthCtx>({
   user: null,
   session: null,
   loading: true,
-  signOut: async () => {}
+  signOut: async () => {},
 })
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -26,40 +26,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let mounted = true
-    ;(async () => {
-      try {
-        const { data } = await supabase.auth.getSession()
+
+    // 1) Get existing session on first mount
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
         if (!mounted) return
         setSession(data.session ?? null)
         setUser(data.session?.user ?? null)
-      } catch (e: any) {
-        setError(e?.message || 'Auth init failed')
-      } finally {
-        setLoading(false)
-      }
-    })()
+      })
+      .catch((e) => setError(e?.message ?? 'Auth init failed'))
+      .finally(() => {
+        if (mounted) setLoading(false)
+      })
 
-    const { data: sub } =
-      supabase.auth.onAuthStateChange?.((_e, sess) => {
-        setSession(sess ?? null)
-        setUser(sess?.user ?? null)
-      }) || { data: { subscription: { unsubscribe() {} } } }
+    // 2) Subscribe to auth changes (sign in/out/refresh)
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, sess) => {
+      setSession(sess ?? null)
+      setUser(sess?.user ?? null)
+    })
 
     return () => {
       mounted = false
-      sub?.subscription?.unsubscribe?.()
+      subscription?.subscription?.unsubscribe?.()
     }
   }, [])
 
   async function signOut() {
-    try { await supabase.auth.signOut() } catch { /* ignore */ }
+    try {
+      await supabase.auth.signOut()
+    } catch {
+      /* ignore */
+    }
   }
 
-  return (
-    <Ctx.Provider value={{ user, session, loading, signOut, error }}>
-      {children}
-    </Ctx.Provider>
+  const value = useMemo<AuthCtx>(
+    () => ({ user, session, loading, signOut, error }),
+    [user, session, loading, error]
   )
+
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
 
 export function useAuth() {
