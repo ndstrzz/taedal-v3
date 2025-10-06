@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../state/AuthContext";
 import { supabase } from "../lib/supabase";
-import { DEFAULT_COVER_URL } from "../lib/config";
+import { DEFAULT_COVER_URL, API_BASE } from "../lib/config";
 import { pinFileViaServerWithProgress } from "../lib/ipfs";
 import { useToast } from "../components/Toaster";
 import { Skeleton } from "../components/Skeleton";
@@ -45,7 +45,6 @@ export default function CreateArtwork() {
   // skeleton for first mount
   const [initializing, setInitializing] = useState(true);
   useEffect(() => {
-    // small UX: delay to avoid flash if the page is instant
     const t = setTimeout(() => setInitializing(false), 200);
     return () => clearTimeout(t);
   }, []);
@@ -91,13 +90,21 @@ export default function CreateArtwork() {
       return;
     }
     setFile(f);
-    // new file → reset similarity state
     setCandidates(null);
     setMustConfirmSimilar(false);
   }, [toast]);
 
+  const api = (path: string) => {
+    const base = API_BASE?.replace(/\/$/, "");
+    return `${base}${path}`;
+  };
+
   const runSimilarityCheck = useCallback(async () => {
     if (!file) return;
+    if (!API_BASE) {
+      toast({ variant: "error", title: "API not configured", description: "Missing API_BASE in window.__CONFIG__" });
+      return;
+    }
     setChecking(true);
     setCandidates(null);
     setMustConfirmSimilar(false);
@@ -105,7 +112,7 @@ export default function CreateArtwork() {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch("/api/verify", { // your Render proxy is set in vite dev proxy or use window.__CONFIG__.API_BASE via lib/ipfs
+      const r = await fetch(api("/api/verify"), {
         method: "POST",
         body: fd,
       });
@@ -139,17 +146,22 @@ export default function CreateArtwork() {
       toast({ variant: "error", title: "Select a file" });
       return;
     }
+    if (!API_BASE) {
+      toast({ variant: "error", title: "API not configured", description: "Missing API_BASE in window.__CONFIG__" });
+      return;
+    }
 
     setBusy(true);
     setProgress(0);
 
     try {
-      // 1) Pin primary media
+      // 1) Pin primary media (this call already uses API_BASE inside pinFileViaServerWithProgress if you built it that way;
+      // if not, pass the base here)
       let lastShown = 0;
       const pin = await pinFileViaServerWithProgress(file, file.name, (ratio) => {
         const pct = Math.round(ratio * 100);
         if (pct - lastShown >= 2 || pct === 100) {
-          setProgress(Math.min(99, pct)); // leave headroom for next steps
+          setProgress(Math.min(99, pct));
           lastShown = pct;
         }
       });
@@ -159,8 +171,8 @@ export default function CreateArtwork() {
       // 2) Hashes
       const fd1 = new FormData();
       fd1.append("file", file);
-      const r1 = await fetch("/api/hashes", { method: "POST", body: fd1 });
-      if (!r1.ok) throw new Error("Failed to compute hashes");
+      const r1 = await fetch(api("/api/hashes"), { method: "POST", body: fd1 });
+      if (!r1.ok) throw new Error(`Failed to compute hashes (${r1.status})`);
       const { dhash64, sha256 } = await r1.json();
       toast({ title: "Computed hashes", description: "Perceptual + SHA256" });
 
@@ -174,12 +186,12 @@ export default function CreateArtwork() {
           mime_type: file.type,
         },
       };
-      const r2 = await fetch("/api/metadata", {
+      const r2 = await fetch(api("/api/metadata"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(metadata),
       });
-      if (!r2.ok) throw new Error("Failed to pin metadata");
+      if (!r2.ok) throw new Error(`Failed to pin metadata (${r2.status})`);
       const { metadata_cid, metadata_url } = await r2.json();
       toast({ variant: "success", title: "Pinned metadata" });
 
@@ -191,7 +203,7 @@ export default function CreateArtwork() {
           title: title.trim(),
           description: description.trim(),
           cover_url: DEFAULT_COVER_URL,
-          status: "published", // or 'draft' if you'd like
+          status: "published",
           image_cid: pin.cid,
           metadata_url: metadata_url ?? `ipfs://${metadata_cid}`,
           dhash64,
@@ -208,9 +220,6 @@ export default function CreateArtwork() {
         description: "Redirecting to your artwork…",
       });
 
-      // 5) Optional: mint (your eth.ts stub can be called here if you want)
-      // If you later set token_id/tx_hash, update the row and show a success toast.
-
       navigate(`/a/${inserted.id}`, { replace: true });
     } catch (err: any) {
       toast({ variant: "error", title: "Create failed", description: String(err.message || err) });
@@ -219,7 +228,7 @@ export default function CreateArtwork() {
     }
   }, [user, file, title, description, navigate, toast]);
 
-  // --- UI ---
+  // --- UI (unchanged from previous version) ---
 
   if (initializing) {
     return (
@@ -242,7 +251,6 @@ export default function CreateArtwork() {
       <h1 className="mb-6 text-2xl font-semibold">Create artwork</h1>
 
       <form onSubmit={onSubmit} className="grid grid-cols-1 gap-6 md:grid-cols-2">
-        {/* Left: preview + pick */}
         <div>
           <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-900">
             {previewUrl ? (
@@ -279,7 +287,6 @@ export default function CreateArtwork() {
           </div>
         </div>
 
-        {/* Right: details */}
         <div className="space-y-4">
           <label className="block">
             <span className="mb-1 block text-sm text-neutral-300">Title</span>
@@ -332,7 +339,6 @@ export default function CreateArtwork() {
         </div>
       </form>
 
-      {/* Similarity results */}
       {candidates && (
         <div className="mt-8">
           <h2 className="mb-3 text-lg font-semibold">Possible matches</h2>
