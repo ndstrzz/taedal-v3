@@ -30,7 +30,7 @@ export default function PublicArtwork() {
   const [description, setDescription] = useState('')
   const [pct, setPct] = useState(0)
 
-  const isOwner = art && user && art.owner === user.id
+  const isOwner = !!(art && user && art.owner === user.id)
 
   useEffect(() => {
     ;(async () => {

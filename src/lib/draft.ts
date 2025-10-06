@@ -1,3 +1,4 @@
+// src/lib/draft.ts
 const KEY = 'signupDraftV1'
 
 export type SignupDraft = {

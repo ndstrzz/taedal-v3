@@ -50,7 +50,7 @@ export default function CreateArtwork() {
   const [reviewChecked, setReviewChecked] = useState(true)
   const [consent, setConsent] = useState(false)
 
-  // Hashes we’ll persist in DB
+  // Hashes for DB
   const [dhash, setDhash] = useState<string | null>(null)
   const [sha256, setSha256] = useState<string | null>(null)
 
@@ -58,6 +58,8 @@ export default function CreateArtwork() {
     const f = e.target.files?.[0] || null
     setFile(f)
     setPreview(f ? URL.createObjectURL(f) : null)
+
+    // reset state
     setIpfsCid(null)
     setMetadataCid(null)
     setTxHash(null)
@@ -109,15 +111,13 @@ export default function CreateArtwork() {
   async function publish() {
     setErr('')
 
-    // Refresh session before deciding to bounce
+    // ensure we have a live session/user id
     let uid = user?.id || null
     if (!uid) {
       try {
         const { data } = await supabase.auth.getUser()
         uid = data.user?.id ?? null
-      } catch {
-        /* ignore */
-      }
+      } catch { /* ignore */ }
     }
     if (!uid) {
       setErr('Your session expired. Please log in again.')
@@ -158,7 +158,7 @@ export default function CreateArtwork() {
       setMetadataCid(metadata_cid)
       const metadataURI = `ipfs://${metadata_cid}`
 
-      // 4) Create DB row
+      // 4) Create DB row (NOTE: metadata_url per schema)
       const { data: a, error } = await supabase
         .from('artworks')
         .insert({
@@ -167,7 +167,7 @@ export default function CreateArtwork() {
           description: description.trim() || null,
           cover_url: pin.gatewayUrl || DEFAULT_COVER_URL,
           status: 'published',
-          metadata_uri: metadataURI,
+          metadata_url: metadataURI,   // <-- schema uses metadata_url
           image_cid: pin.cid,
           dhash64: hashes.dhash64,
           sha256: hashes.sha256,
@@ -177,7 +177,7 @@ export default function CreateArtwork() {
       if (error) throw error
       const artworkId = a.id as string
 
-      // 5) Mint
+      // 5) Mint on chain
       setPhase('minting')
       setPct((p) => Math.max(p, 40))
       const res = await mintOnChain(metadataURI, 0)
@@ -186,13 +186,13 @@ export default function CreateArtwork() {
       setPct(100)
       setPhase('complete')
 
-      // 6) Portfolio sync
+      // 6) Save token details
       await supabase
         .from('artworks')
         .update({ token_id: res.tokenId ?? null, tx_hash: res.hash ?? null })
         .eq('id', artworkId)
 
-      // 7) Go to detail
+      // 7) Go to artwork page
       nav(`/a/${artworkId}`, { replace: true })
     } catch (e: any) {
       setErr(e?.message || 'Publish failed')
