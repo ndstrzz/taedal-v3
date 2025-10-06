@@ -2,18 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------- Design tokens ---------- */
 :root {
   --color-brand: #8EE2FF;
   --color-accent: #FFD166;
+
   --color-bg: #0B0B0C;
   --color-elev-1: #121214;
   --color-elev-2: #18181B;
+
   --color-text: #F2F2F2;
   --color-subtle: #C7C7C7;
   --color-border: #29292E;
+
   --color-success: #22C55E;
-  --color-warn: #F59E0B;
-  --color-error: #EF4444;
+  --color-warn:    #F59E0B;
+  --color-error:   #EF4444;
 
   --radius-sm: 8px;
   --radius-md: 16px;
@@ -24,6 +28,24 @@
   --shadow-2: 0 12px 40px rgba(0,0,0,.35);
 }
 
-/* smoothing + font defaults */
+/* ---------- Base smoothing ---------- */
 html, body, #root { height: 100%; }
-body { font-feature-settings: "ss01" on, "cv01" on; }
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-feature-settings: "ss01" on, "cv01" on;
+}
+
+/* ---------- Small, handy utilities ---------- */
+@layer utilities {
+  .ring-border { --tw-ring-color: var(--color-border); }
+  .ring-brand  { --tw-ring-color: var(--color-brand); }
+  .text-subtle { color: var(--color-subtle); }
+  .text-error  { color: var(--color-error); }
+  .bg-bg       { background-color: var(--color-bg); }
+  .bg-elev1    { background-color: var(--color-elev-1); }
+  .bg-elev2    { background-color: var(--color-elev-2); }
+  .text-text   { color: var(--color-text); }
+  .shadow-1    { box-shadow: var(--shadow-1); }
+  .shadow-2    { box-shadow: var(--shadow-2); }
+}
