@@ -1,48 +1,41 @@
 {
   "name": "taedal-v3",
-  "private": true,
   "version": "0.0.1",
-"type": "module",
-"scripts": {
-    "web": "vite",
-    "api": "node server/index.cjs",
-    "api:watch": "nodemon --watch server server/index.cjs",
+  "private": true,
+  "engines": { "node": ">=18" },
+  "scripts": {
     "dev": "concurrently -k -n api,web -c magenta,cyan \"node server/index.cjs\" \"vite\"",
-    "dev:watch": "concurrently -k -n api,web -c magenta,cyan \"nodemon --watch server server/index.cjs\" \"vite\"",
     "build": "tsc -b && vite build",
-    "preview": "vite preview --port 5173"
-},
-"dependencies": {
-    "@react-three/drei": "^9.122.0",
-    "@react-three/fiber": "^8.15.16",
-    "@react-three/postprocessing": "^2.16.2",
-    "@supabase/supabase-js": "^2.58.0",
-    "axios": "^1.12.2",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@react-three/drei": "9.122.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "axios": "^1.7.7",
+    "clsx": "^2.1.1",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
-    "ethers": "^6.13.1",
-    "express": "^5.1.0",
-    "form-data": "^4.0.4",
-    "framer-motion": "^11.2.10",
+    "ethers": "^6.13.2",
+    "express": "^4.19.2",
+    "form-data": "^4.0.0",
+    "framer-motion": "^11.3.31",
     "gsap": "^3.12.5",
-    "lenis": "^1.1.20",
-    "multer": "^2.0.2",
+    "lenis": "^1.1.14",
+    "multer": "^1.4.5-lts.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-helmet-async": "^2.0.5",
     "react-router-dom": "^6.26.2",
-    "three": "^0.160.0"
+    "sharp": "^0.33.5",
+    "three": "^0.165.0"
   },
   "devDependencies": {
-    "@types/react": "^18.3.5",
+    "@types/node": "^20.14.10",
+    "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.1",
-    "autoprefixer": "^10.4.20",
-    "concurrently": "^9.2.1",
-    "nodemon": "^3.1.10",
-    "postcss": "^8.4.47",
-    "tailwindcss": "^3.4.13",
-    "typescript": "^5.5.4",
+    "concurrently": "^8.2.2",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.10",
+    "typescript": "^5.6.3",
     "vite": "^5.4.8"
   }
 }
