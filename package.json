@@ -6,6 +6,7 @@
   },
   "dependencies": {
     "@react-three/fiber": "^8.15.19",
+    "@supabase/supabase-js": "^2.58.0",
     "@vitejs/plugin-react": "^5.0.4",
     "ethers": "^6.13.1",
     "framer-motion": "^12.23.22",
