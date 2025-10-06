@@ -1,34 +1,37 @@
-import { Routes, Route } from 'react-router-dom'
-import NavBar from './components/NavBar'
-import Home from './pages/Home'
-import Account from './pages/Account'
-import SettingsProfile from './pages/SettingsProfile'
-import CreateArtwork from './pages/CreateArtwork'
-import Login from './pages/Login'
-import Signup from './pages/Signup'
-import PublicProfile from './routes/PublicProfile'
-import PublicArtwork from './routes/PublicArtwork'
+import React from "react";
+import { Routes, Route } from "react-router-dom";
+import NavBar from "./components/NavBar";
+import Account from "./pages/Account";
+import Login from "./pages/Login";
+import Signup from "./pages/Signup";
+import SettingsProfile from "./pages/SettingsProfile";
+import CreateArtwork from "./pages/CreateArtwork";
+import PublicProfile from "./routes/PublicProfile";
+import PublicArtwork from "./routes/PublicArtwork";
+import RequireAuth from "./components/RequireAuth";
 
 export default function App() {
   return (
-    <>
+    <div className="min-h-screen bg-neutral-950 text-neutral-100">
       <NavBar />
-      <main className="mx-auto max-w-6xl px-4">
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/account" element={<Account />} />
-          <Route path="/settings" element={<SettingsProfile />} />
-          <Route path="/create" element={<CreateArtwork />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/signup" element={<Signup />} />
-
-          {/* ✅ public profile path (no '@' anymore) */}
-          <Route path="/u/:handle" element={<PublicProfile />} />
-
-          <Route path="/community" element={<PublicArtwork />} />
-          <Route path="/portfolio" element={<PublicArtwork />} />
-        </Routes>
-      </main>
-    </>
-  )
+      <Routes>
+        <Route path="/" element={<Account />} />
+        <Route
+          path="/create"
+          element={
+            <RequireAuth>
+              <CreateArtwork />
+            </RequireAuth>
+          }
+        />
+        <Route path="/settings" element={<RequireAuth><SettingsProfile /></RequireAuth>} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Signup />} />
+        <Route path="/@:handle" element={<PublicProfile />} />
+        <Route path="/a/:id" element={<PublicArtwork />} />
+        {/* 404 fallback (optional) */}
+        <Route path="*" element={<div className="p-8 text-neutral-400">Not found.</div>} />
+      </Routes>
+    </div>
+  );
 }

@@ -1,189 +1,235 @@
-// src/pages/SettingsProfile.tsx
-import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
-import { DEFAULT_AVATAR_URL, DEFAULT_COVER_URL } from '../lib/config'
-import { uploadPublicBlob } from '../lib/storage'
-import { useAuth } from '../state/AuthContext'
-import CropModal from '../components/CropModal'
+import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../state/AuthContext";
+import { supabase } from "../lib/supabase";
+import { uploadPublicBlob } from "../lib/storage";
+import CropModal from "../components/CropModal";
+import { useToast } from "../components/Toaster";
+
+type Profile = {
+  id: string;
+  username: string | null;
+  display_name: string | null;
+  bio: string | null;
+  avatar_url: string | null;
+  cover_url: string | null;
+};
 
 export default function SettingsProfile() {
-  const { user } = useAuth()
-  const nav = useNavigate()
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const navigate = useNavigate();
 
-  const [displayName, setDisplayName] = useState('')
-  const [username, setUsername] = useState('')
-  const [bio, setBio] = useState('')
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [form, setForm] = useState({
+    username: "",
+    display_name: "",
+    bio: "",
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  const [avatarUrl, setAvatarUrl] = useState<string>('')
-  const [coverUrl, setCoverUrl] = useState<string>('')
+  const [cropOpen, setCropOpen] = useState<null | { kind: "avatar" | "cover"; file: File }>(null);
 
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-
-  // crop modal state
-  const [cropFor, setCropFor] = useState<'avatar' | 'cover' | null>(null)
-  const [cropFile, setCropFile] = useState<File | null>(null)
-
+  // load existing profile
   useEffect(() => {
-    if (!user) return
-    ;(async () => {
-      const { data } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .maybeSingle()
-      if (data) {
-        setDisplayName(data.display_name || '')
-        setUsername(data.username || '')
-        setBio(data.bio || '')
-        setAvatarUrl(data.avatar_url || '')
-        setCoverUrl(data.cover_url || '')
+    (async () => {
+      if (!user) return;
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id,username,display_name,bio,avatar_url,cover_url")
+        .eq("id", user.id)
+        .maybeSingle();
+      setLoading(false);
+      if (error) {
+        toast({ variant: "error", title: "Failed to load profile", description: error.message });
+        return;
       }
-    })()
-  }, [user])
+      const p = (data as Profile) || null;
+      setProfile(p);
+      setForm({
+        username: p?.username || "",
+        display_name: p?.display_name || "",
+        bio: p?.bio || "",
+      });
+    })();
+  }, [user, toast]);
 
-  function beginCrop(kind: 'avatar' | 'cover') {
-    return (e: React.ChangeEvent<HTMLInputElement>) => {
-      const f = e.target.files?.[0]
-      if (!f || !user) return
-      setCropFor(kind)
-      setCropFile(f)
-      // allow re-selecting the same file
-      e.currentTarget.value = ''
-    }
-  }
+  const displayName = useMemo(
+    () => form.display_name || (form.username ? `@${form.username}` : "You"),
+    [form.display_name, form.username]
+  );
 
-  // cache-buster so the CDN shows the fresh file immediately
-  function bust(url: string) {
-    const sep = url.includes('?') ? '&' : '?'
-    return `${url}${sep}v=${Date.now()}`
-  }
-
-  async function handleCropped(blob: Blob) {
-    if (!user || !cropFor) return
-    setBusy(true); setErr('')
-    try {
-      const url = await uploadPublicBlob(
-        cropFor === 'avatar' ? 'avatars' : 'covers',
-        user.id,
-        blob,
-        'jpg'
-      )
-      const fresh = bust(url)
-      if (cropFor === 'avatar') setAvatarUrl(fresh)
-      else setCoverUrl(fresh)
-    } catch (e: any) {
-      setErr(e.message || 'Upload failed')
-    } finally {
-      setBusy(false)
-      setCropFor(null)
-      setCropFile(null)
-    }
-  }
-
-  async function save() {
-    if (!user) return
-    if (!username.trim()) { setErr('Username is required'); return }
-    setBusy(true); setErr('')
-    try {
-      const uname = username.toLowerCase()
-      const { error } = await supabase.from('profiles').update({
-        username: uname,
-        display_name: displayName || null,
-        bio: bio || null,
-        avatar_url: avatarUrl || null,
-        cover_url: coverUrl || null,
+  async function onSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (!user) return;
+    setSaving(true);
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        username: form.username.trim() || null,
+        display_name: form.display_name.trim() || null,
+        bio: form.bio.trim() || null,
         updated_at: new Date().toISOString(),
-      }).eq('id', user.id)
-      if (error) throw error
+      })
+      .eq("id", user.id);
+    setSaving(false);
 
-      // notify app to refresh any profile consumers (navbar avatar, etc.)
-      window.dispatchEvent(new Event('profile-updated'))
-
-      // ✅ go to new public profile route
-      nav(`/u/${uname}`, { replace: true })
-    } catch (e: any) {
-      setErr(e.message || 'Failed to save profile')
-    } finally {
-      setBusy(false)
+    if (error) {
+      toast({ variant: "error", title: "Couldn’t save", description: error.message });
+      return;
     }
+
+    toast({ variant: "success", title: "Profile saved" });
+    if (form.username) navigate(`/@${form.username}`, { replace: true });
+  }
+
+  function onPick(kind: "avatar" | "cover") {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/png,image/jpeg,image/webp";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setCropOpen({ kind, file });
+    };
+    input.click();
+  }
+
+  async function onCropDone(cropped: Blob, meta: { width: number; height: number }) {
+    if (!user || !cropOpen) return;
+
+    try {
+      const ext = "webp"; // CropModal should export webp/png; choose a consistent ext
+      const bucket = cropOpen.kind === "avatar" ? "avatars" : "covers";
+      const url = await uploadPublicBlob(bucket, user.id, cropped, ext);
+
+      // cache-bust
+      const busted = `${url}?v=${Date.now()}`;
+
+      const patch: Record<string, any> =
+        cropOpen.kind === "avatar" ? { avatar_url: busted } : { cover_url: busted };
+
+      const { error } = await supabase.from("profiles").update(patch).eq("id", user.id);
+      if (error) throw error;
+
+      setProfile((p) => (p ? { ...p, ...patch } as Profile : p));
+      toast({
+        variant: "success",
+        title: cropOpen.kind === "avatar" ? "Avatar updated" : "Cover updated",
+      });
+    } catch (err: any) {
+      toast({
+        variant: "error",
+        title: "Upload failed",
+        description: String(err.message || err),
+      });
+    } finally {
+      setCropOpen(null);
+    }
+  }
+
+  function onCropCancel() {
+    setCropOpen(null);
+  }
+
+  if (loading) {
+    return <div className="p-8 text-neutral-400">Loading…</div>;
   }
 
   return (
     <div className="mx-auto max-w-3xl p-6">
-      <h1 className="mb-2 text-h1">Profile settings</h1>
-      <p className="mb-6 text-subtle">Make it yours.</p>
+      <h1 className="mb-6 text-2xl font-semibold">Edit profile</h1>
 
-      <div className="mb-6 grid grid-cols-1 gap-6 md:grid-cols-3">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-24 w-24 overflow-hidden rounded-full ring-1 ring-border bg-elev1">
-            <img src={avatarUrl || DEFAULT_AVATAR_URL} className="h-full w-full object-cover" />
-          </div>
-          <label className="cursor-pointer rounded-lg bg-elev1 px-3 py-1.5 text-sm ring-1 ring-border hover:bg-elev2">
-            <input type="file" accept="image/*" className="hidden" onChange={beginCrop('avatar')} />
-            Upload avatar
-          </label>
+      {/* Cover */}
+      <div className="relative mb-8">
+        <div className="h-40 w-full overflow-hidden rounded-2xl bg-neutral-900">
+          {profile?.cover_url ? (
+            <img src={profile.cover_url} className="h-40 w-full object-cover" />
+          ) : (
+            <div className="grid h-40 w-full place-items-center text-neutral-500">No cover</div>
+          )}
         </div>
-
-        <div className="md:col-span-2">
-          <div className="h-32 w-full overflow-hidden rounded-lg ring-1 ring-border bg-elev1">
-            <img src={coverUrl || DEFAULT_COVER_URL} className="h-full w-full object-cover" />
-          </div>
-          <div className="mt-2">
-            <label className="cursor-pointer rounded-lg bg-elev1 px-3 py-1.5 text-sm ring-1 ring-border hover:bg-elev2">
-              <input type="file" accept="image/*" className="hidden" onChange={beginCrop('cover')} />
-              Upload cover
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <input
-          className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:ring-brand"
-          placeholder="Display name"
-          value={displayName}
-          onChange={(e) => setDisplayName(e.target.value)}
-        />
-        <input
-          className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:ring-brand"
-          placeholder="username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value.toLowerCase())}
-        />
-      </div>
-
-      <textarea
-        className="mt-4 min-h-[96px] w-full rounded-lg bg-elev1 p-3 ring-1 ring-border focus:ring-brand"
-        placeholder="Short bio"
-        value={bio}
-        onChange={(e) => setBio(e.target.value.slice(0, 160))}
-      />
-
-      {err && <div className="mt-3 text-sm text-error">{err}</div>}
-
-      <div className="mt-6 flex items-center gap-3">
         <button
-          onClick={save}
-          disabled={busy}
-          className="rounded-lg bg-brand/20 px-4 py-2 text-sm ring-1 ring-brand/50 hover:bg-brand/30"
+          onClick={() => onPick("cover")}
+          className="absolute bottom-3 right-3 rounded-xl border border-neutral-700 bg-neutral-900/70 px-3 py-1.5 text-sm backdrop-blur hover:bg-neutral-800"
         >
-          {busy ? 'Saving…' : 'Save changes'}
-        </button>
-        <button onClick={() => nav(-1)} className="text-sm text-subtle hover:text-text">
-          Cancel
+          Change cover
         </button>
       </div>
 
-      {cropFor && cropFile && (
+      {/* Header */}
+      <div className="mb-6 flex items-center gap-4">
+        <img
+          src={profile?.avatar_url || "/brand/taedal-logo.svg"}
+          className="h-20 w-20 rounded-full object-cover ring-4 ring-neutral-950"
+        />
+        <div className="flex-1">
+          <div className="text-lg font-medium">{displayName}</div>
+          <div className="text-sm text-neutral-400">
+            {form.username ? `@${form.username}` : "Set a username"}
+          </div>
+        </div>
+        <button
+          onClick={() => onPick("avatar")}
+          className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900"
+        >
+          Change avatar
+        </button>
+      </div>
+
+      {/* Form */}
+      <form className="space-y-4" onSubmit={onSave}>
+        <label className="block">
+          <span className="mb-1 block text-sm text-neutral-300">Display name</span>
+          <input
+            value={form.display_name}
+            onChange={(e) => setForm((s) => ({ ...s, display_name: e.target.value }))}
+            className="w-full rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2"
+            placeholder="Your name"
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-sm text-neutral-300">Username</span>
+          <input
+            value={form.username}
+            onChange={(e) => setForm((s) => ({ ...s, username: e.target.value }))}
+            className="w-full rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2"
+            placeholder="yourhandle"
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-sm text-neutral-300">Bio</span>
+          <textarea
+            value={form.bio}
+            onChange={(e) => setForm((s) => ({ ...s, bio: e.target.value }))}
+            className="min-h-[100px] w-full resize-y rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2"
+            placeholder="Tell collectors about yourself…"
+          />
+        </label>
+
+        <div className="pt-2">
+          <button
+            disabled={saving}
+            className="rounded-xl bg-white px-4 py-2 font-medium text-black disabled:opacity-60"
+          >
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+      </form>
+
+      {/* Crop modal */}
+      {cropOpen && (
         <CropModal
-          file={cropFile}
-          mode={cropFor}
-          onCancel={() => { setCropFor(null); setCropFile(null) }}
-          onConfirm={handleCropped}
+          file={cropOpen.file}
+          aspect={cropOpen.kind === "avatar" ? 1 : 5 / 2}
+          onCancel={onCropCancel}
+          onDone={onCropDone}
         />
       )}
     </div>
-  )
+  );
 }

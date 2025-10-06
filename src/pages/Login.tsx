@@ -1,90 +1,116 @@
-import { useEffect, useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
-import { useAuth } from '../state/AuthContext'
+import React, { useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useAuth } from "../state/AuthContext";
+import { supabase } from "../lib/supabase";
+import "../index.css";
 
 export default function Login() {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [err, setErr] = useState('')
-  const [notice, setNotice] = useState('')
-  const [busy, setBusy] = useState(false)
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const next = params.get("next") || "/";
+  const { user, loading } = useAuth();
 
-  const loc = useLocation() as any
-  const { error: bootError } = useAuth()
+  const [form, setForm] = useState({ email: "", password: "" });
+  const [showPw, setShowPw] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (bootError) setErr(bootError)
-    if (loc.state?.notice) setNotice(loc.state.notice)
-  }, [bootError, loc.state])
+    if (!loading && user) {
+      navigate(next, { replace: true });
+    }
+  }, [loading, user, next, navigate]);
 
   async function onSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    setErr('')
-    setBusy(true)
-    try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password })
-      if (error) throw error
-
-      // ✅ Force a full reload into the app so the session is present immediately
-      window.location.assign('/create') // or '/' if you prefer landing on home
-    } catch (e: any) {
-      setErr(e?.message ?? 'Failed to sign in')
-    } finally {
-      setBusy(false)
+    e.preventDefault();
+    setBusy(true);
+    setMsg(null);
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: form.email.trim(),
+      password: form.password,
+    });
+    setBusy(false);
+    if (error) {
+      setMsg(error.message);
+      return;
+    }
+    if (data.user) {
+      navigate(next, { replace: true });
     }
   }
 
-  async function loginWithGoogle() {
-    setErr('')
-    try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: { redirectTo: window.location.origin },
-      })
-      if (error) throw error
-      // Supabase will redirect; nothing else to do.
-    } catch (e: any) {
-      setErr(e?.message ?? 'Google sign-in failed')
-    }
+  async function googleSignIn() {
+    setBusy(true);
+    setMsg(null);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin + `/login?next=${encodeURIComponent(next)}` },
+    });
+    setBusy(false);
+    if (error) setMsg(error.message);
   }
 
   return (
     <div className="mx-auto max-w-md p-6">
-      <h1 className="mb-6 text-h1">Log in</h1>
+      <h1 className="text-2xl font-semibold mb-4">Log in</h1>
 
-      {notice && <div className="mb-4 rounded-lg bg-elev1 p-3 text-sm ring-1 ring-border">{notice}</div>}
+      {msg && <div className="mb-3 text-red-400 text-sm">{msg}</div>}
 
-      <form onSubmit={onSubmit} className="space-y-4">
-        <input
-          type="email"
-          placeholder="you@example.com"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="w-full rounded-lg bg-elev1 p-3 ring-1 ring-border focus:outline-none focus:ring-brand"
-          required
-        />
-        <input
-          type="password"
-          placeholder="••••••••"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full rounded-lg bg-elev1 p-3 ring-1 ring-border focus:outline-none focus:ring-brand"
-          required
-        />
-        {err && <div className="text-error text-sm">{err}</div>}
-        <button disabled={busy} className="w-full rounded-lg bg-brand/20 p-3 text-sm ring-1 ring-brand/50 hover:bg-brand/30">
-          {busy ? 'Signing in…' : 'Sign in'}
+      <form onSubmit={onSubmit} className="space-y-3">
+        <label className="block">
+          <span className="text-sm">Email</span>
+          <input
+            type="email"
+            className="mt-1 w-full rounded-xl bg-neutral-900 border border-neutral-800 px-3 py-2"
+            value={form.email}
+            onChange={(e) => setForm((s) => ({ ...s, email: e.target.value }))}
+            required
+          />
+        </label>
+
+        <label className="block">
+          <span className="text-sm">Password</span>
+          <div className="mt-1 flex">
+            <input
+              type={showPw ? "text" : "password"}
+              className="flex-1 rounded-l-xl bg-neutral-900 border border-neutral-800 px-3 py-2"
+              value={form.password}
+              onChange={(e) => setForm((s) => ({ ...s, password: e.target.value }))}
+              required
+            />
+            <button
+              type="button"
+              className="rounded-r-xl border border-l-0 border-neutral-800 px-3 text-xs"
+              onClick={() => setShowPw((s) => !s)}
+            >
+              {showPw ? "Hide" : "Show"}
+            </button>
+          </div>
+        </label>
+
+        <button
+          className="w-full rounded-xl bg-white text-black py-2 font-medium disabled:opacity-60"
+          disabled={busy}
+        >
+          {busy ? "Signing in…" : "Sign in"}
+        </button>
+
+        <button
+          type="button"
+          onClick={googleSignIn}
+          className="w-full rounded-xl border border-neutral-700 py-2 text-sm"
+          disabled={busy}
+        >
+          Continue with Google
         </button>
       </form>
 
-      <button onClick={loginWithGoogle} className="mt-4 w-full rounded-lg bg-elev1 p-3 text-sm ring-1 ring-border hover:bg-elev2">
-        Continue with Google
-      </button>
-
-      <p className="mt-4 text-sm text-subtle">
-        Don’t have an account? <Link to="/signup" className="text-text underline">Sign up</Link>
+      <p className="mt-4 text-sm text-neutral-400">
+        Don’t have an account?{" "}
+        <Link className="underline" to={`/signup?next=${encodeURIComponent(next)}`}>
+          Sign up
+        </Link>
       </p>
     </div>
-  )
+  );
 }

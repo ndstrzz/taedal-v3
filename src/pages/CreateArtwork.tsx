@@ -1,379 +1,369 @@
-import { useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../state/AuthContext'
-import { supabase } from '../lib/supabase'
-import { DEFAULT_COVER_URL, API_BASE } from '../lib/config'
-import { pinFileViaServerWithProgress } from '../lib/ipfs'
-import { mintOnChain, txUrl, tokenUrl } from '../lib/eth'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../state/AuthContext";
+import { supabase } from "../lib/supabase";
+import { DEFAULT_COVER_URL } from "../lib/config";
+import { pinFileViaServerWithProgress } from "../lib/ipfs";
+import { useToast } from "../components/Toaster";
+import { Skeleton } from "../components/Skeleton";
 
 type SimilarRecord = {
-  id: string | number
-  title: string
-  username: string
-  user_id: string
-  image_url: string
-  score?: number
+  id: string;
+  title: string | null;
+  username?: string | null;
+  user_id?: string | null;
+  image_url?: string | null;
+  score?: number;
+};
+
+const ACCEPT = "image/png,image/jpeg,image/webp,video/mp4";
+const MAX_MB = 25;
+
+function fmtMB(bytes: number) {
+  return (bytes / (1024 * 1024)).toFixed(1) + "MB";
 }
 
-const ACCEPT = 'image/png,image/jpeg,image/webp,video/mp4'
-const MAX_MB = 25
-
 export default function CreateArtwork() {
-  const { user } = useAuth()
-  const nav = useNavigate()
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const { toast } = useToast();
 
-  // Form
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // File
-  const [file, setFile] = useState<File | null>(null)
-  const [preview, setPreview] = useState<string | null>(null)
-  const pickRef = useRef<HTMLInputElement>(null)
+  const [file, setFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string>("");
+  const [title, setTitle] = useState<string>("");
+  const [description, setDescription] = useState<string>("");
 
-  // UX state
-  const [err, setErr] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [phase, setPhase] = useState<'idle' | 'uploading' | 'minting' | 'complete'>('idle')
-  const [pct, setPct] = useState(0)
+  const [checking, setChecking] = useState(false);
+  const [candidates, setCandidates] = useState<SimilarRecord[] | null>(null);
+  const [mustConfirmSimilar, setMustConfirmSimilar] = useState(false);
 
-  // Outputs
-  const [ipfsCid, setIpfsCid] = useState<string | null>(null)
-  const [metadataCid, setMetadataCid] = useState<string | null>(null)
-  const [txHash, setTxHash] = useState<string | null>(null)
-  const [tokenId, setTokenId] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<number>(0);
 
-  // Similarity + rights gate
-  const [similar, setSimilar] = useState<SimilarRecord[]>([])
-  const [similarBusy, setSimilarBusy] = useState(false)
-  const [similarErr, setSimilarErr] = useState<string | null>(null)
-  const [reviewChecked, setReviewChecked] = useState(true)
-  const [consent, setConsent] = useState(false)
+  // skeleton for first mount
+  const [initializing, setInitializing] = useState(true);
+  useEffect(() => {
+    // small UX: delay to avoid flash if the page is instant
+    const t = setTimeout(() => setInitializing(false), 200);
+    return () => clearTimeout(t);
+  }, []);
 
-  // Hashes for DB
-  const [dhash, setDhash] = useState<string | null>(null)
-  const [sha256, setSha256] = useState<string | null>(null)
-
-  function onPick(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0] || null
-    setFile(f)
-    setPreview(f ? URL.createObjectURL(f) : null)
-
-    // reset state
-    setIpfsCid(null)
-    setMetadataCid(null)
-    setTxHash(null)
-    setTokenId(null)
-    setErr('')
-    setDhash(null)
-    setSha256(null)
-
-    if (f) {
-      runSimilarCheck(f) // async; doesn’t block
-    } else {
-      setSimilar([])
-      setReviewChecked(true)
+  // Preview blob URL management
+  useEffect(() => {
+    if (!file) {
+      setPreviewUrl("");
+      return;
     }
-  }
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
 
-  async function runSimilarCheck(f: File) {
-    setSimilarBusy(true)
-    setSimilarErr(null)
+  const canSubmit = useMemo(
+    () => !!file && !!title.trim() && !busy && (!mustConfirmSimilar || candidates?.length === 0),
+    [file, title, busy, mustConfirmSimilar, candidates]
+  );
+
+  // --- handlers ---
+
+  const onPick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+
+    if (!ACCEPT.split(",").includes(f.type)) {
+      toast({
+        variant: "error",
+        title: "Unsupported file type",
+        description: `Got ${f.type}. Allowed: ${ACCEPT.replaceAll("image/", "").replaceAll("video/", "")}`,
+      });
+      e.target.value = "";
+      return;
+    }
+    if (f.size > MAX_MB * 1024 * 1024) {
+      toast({
+        variant: "error",
+        title: "File too large",
+        description: `Max ${MAX_MB}MB, got ${fmtMB(f.size)}.`,
+      });
+      e.target.value = "";
+      return;
+    }
+    setFile(f);
+    // new file → reset similarity state
+    setCandidates(null);
+    setMustConfirmSimilar(false);
+  }, [toast]);
+
+  const runSimilarityCheck = useCallback(async () => {
+    if (!file) return;
+    setChecking(true);
+    setCandidates(null);
+    setMustConfirmSimilar(false);
+
     try {
-      const fd = new FormData()
-      fd.append('artwork', f)
-      const res = await fetch(`${API_BASE}/api/verify`, { method: 'POST', body: fd })
-      if (!res.ok) throw new Error(`Similarity check failed (${res.status})`)
-      const data = await res.json()
-      const matches: SimilarRecord[] = Array.isArray(data?.similar) ? data.similar : []
-      setSimilar(matches)
-      setReviewChecked(matches.length === 0)
-    } catch (e: any) {
-      setSimilarErr(e?.message || 'Similarity service unavailable')
-      setSimilar([])
-      setReviewChecked(true)
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch("/api/verify", { // your Render proxy is set in vite dev proxy or use window.__CONFIG__.API_BASE via lib/ipfs
+        method: "POST",
+        body: fd,
+      });
+      if (!r.ok) throw new Error(`Similarity check failed (${r.status})`);
+      const out = (await r.json()) as { matches: SimilarRecord[] };
+      const results = Array.isArray(out?.matches) ? out.matches : [];
+      setCandidates(results);
+      if (results.length > 0) {
+        setMustConfirmSimilar(true);
+        toast({
+          title: "Similar artworks found",
+          description: "Review the results below. Continue only if you confirm yours is original.",
+        });
+      } else {
+        toast({ variant: "success", title: "No near-duplicates found" });
+      }
+    } catch (err: any) {
+      toast({ variant: "error", title: "Similarity check error", description: String(err.message || err) });
     } finally {
-      setSimilarBusy(false)
+      setChecking(false);
     }
-  }
+  }, [file, toast]);
 
-  async function computeHashes(f: File) {
-    const fd = new FormData()
-    fd.append('file', f)
-    const res = await fetch(`${API_BASE}/api/hashes`, { method: 'POST', body: fd })
-    if (!res.ok) throw new Error('hashing failed')
-    const j = await res.json()
-    setDhash(j.dhash64 || null)
-    setSha256(j.sha256 || null)
-    return { dhash64: j.dhash64 || null, sha256: j.sha256 || null }
-  }
-
-  async function publish() {
-    setErr('')
-
-    // ensure we have a live session/user id
-    let uid = user?.id || null
-    if (!uid) {
-      try {
-        const { data } = await supabase.auth.getUser()
-        uid = data.user?.id ?? null
-      } catch { /* ignore */ }
+  const onSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) {
+      toast({ variant: "error", title: "Please log in to create" });
+      return;
     }
-    if (!uid) {
-      setErr('Your session expired. Please log in again.')
-      nav('/login', { replace: true })
-      return
+    if (!file) {
+      toast({ variant: "error", title: "Select a file" });
+      return;
     }
 
-    if (!title.trim()) return setErr('Title is required.')
-    if (!file) return setErr('Please choose an image or video.')
-    if (file.size > MAX_MB * 1024 * 1024) return setErr(`Max file size is ${MAX_MB}MB.`)
-    if (!consent) return setErr('Please confirm you are the rights holder.')
-    if (similar.length > 0 && !reviewChecked) return setErr('Please review matches and confirm.')
-
-    setBusy(true)
-    setPhase('uploading')
-    setPct(0)
+    setBusy(true);
+    setProgress(0);
 
     try {
-      // 1) Pin media
-      const pin = await pinFileViaServerWithProgress(file, title.trim(), (p) => setPct(p))
-      setIpfsCid(pin.cid)
+      // 1) Pin primary media
+      let lastShown = 0;
+      const pin = await pinFileViaServerWithProgress(file, file.name, (ratio) => {
+        const pct = Math.round(ratio * 100);
+        if (pct - lastShown >= 2 || pct === 100) {
+          setProgress(Math.min(99, pct)); // leave headroom for next steps
+          lastShown = pct;
+        }
+      });
+      setProgress(100);
+      toast({ variant: "success", title: "Pinned media to IPFS" });
 
-      // 2) Compute hashes (for DB)
-      const hashes = await computeHashes(file)
+      // 2) Hashes
+      const fd1 = new FormData();
+      fd1.append("file", file);
+      const r1 = await fetch("/api/hashes", { method: "POST", body: fd1 });
+      if (!r1.ok) throw new Error("Failed to compute hashes");
+      const { dhash64, sha256 } = await r1.json();
+      toast({ title: "Computed hashes", description: "Perceptual + SHA256" });
 
-      // 3) Pin metadata
-      const metaRes = await fetch(`${API_BASE}/api/metadata`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: title.trim(),
-          description: description.trim(),
-          imageCid: pin.cid,
-        }),
-      })
-      if (!metaRes.ok) throw new Error('Failed to pin metadata')
-      const { metadata_cid } = await metaRes.json()
-      setMetadataCid(metadata_cid)
-      const metadataURI = `ipfs://${metadata_cid}`
+      // 3) Metadata
+      const metadata = {
+        name: title.trim(),
+        description: description.trim(),
+        image: pin.ipfsUri ?? `ipfs://${pin.cid}`,
+        properties: {
+          bytes: file.size,
+          mime_type: file.type,
+        },
+      };
+      const r2 = await fetch("/api/metadata", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(metadata),
+      });
+      if (!r2.ok) throw new Error("Failed to pin metadata");
+      const { metadata_cid, metadata_url } = await r2.json();
+      toast({ variant: "success", title: "Pinned metadata" });
 
-      // 4) Create DB row (NOTE: metadata_url per schema)
-      const { data: a, error } = await supabase
-        .from('artworks')
+      // 4) Insert DB row
+      const { data: inserted, error: dberr } = await supabase
+        .from("artworks")
         .insert({
-          owner: uid,
+          owner: user.id,
           title: title.trim(),
-          description: description.trim() || null,
-          cover_url: pin.gatewayUrl || DEFAULT_COVER_URL,
-          status: 'published',
-          metadata_url: metadataURI,   // <-- schema uses metadata_url
+          description: description.trim(),
+          cover_url: DEFAULT_COVER_URL,
+          status: "published", // or 'draft' if you'd like
           image_cid: pin.cid,
-          dhash64: hashes.dhash64,
-          sha256: hashes.sha256,
+          metadata_url: metadata_url ?? `ipfs://${metadata_cid}`,
+          dhash64,
+          sha256,
         })
-        .select('id')
-        .single()
-      if (error) throw error
-      const artworkId = a.id as string
+        .select("*")
+        .single();
 
-      // 5) Mint on chain
-      setPhase('minting')
-      setPct((p) => Math.max(p, 40))
-      const res = await mintOnChain(metadataURI, 0)
-      setTxHash(res.hash || null)
-      setTokenId(res.tokenId || null)
-      setPct(100)
-      setPhase('complete')
+      if (dberr) throw dberr;
 
-      // 6) Save token details
-      await supabase
-        .from('artworks')
-        .update({ token_id: res.tokenId ?? null, tx_hash: res.hash ?? null })
-        .eq('id', artworkId)
+      toast({
+        variant: "success",
+        title: "Artwork saved",
+        description: "Redirecting to your artwork…",
+      });
 
-      // 7) Go to artwork page
-      nav(`/a/${artworkId}`, { replace: true })
-    } catch (e: any) {
-      setErr(e?.message || 'Publish failed')
-      setPhase('idle')
-    } finally {
-      setBusy(false)
+      // 5) Optional: mint (your eth.ts stub can be called here if you want)
+      // If you later set token_id/tx_hash, update the row and show a success toast.
+
+      navigate(`/a/${inserted.id}`, { replace: true });
+    } catch (err: any) {
+      toast({ variant: "error", title: "Create failed", description: String(err.message || err) });
+      setBusy(false);
+      setProgress(0);
     }
-  }
+  }, [user, file, title, description, navigate, toast]);
 
-  return (
-    <div className="mx-auto max-w-3xl p-6">
-      <h1 className="mb-2 text-h1">Create artwork</h1>
-      <p className="mb-6 text-subtle">
-        Upload a cover image or short video, add a title and description.
-      </p>
+  // --- UI ---
 
-      <div className="mb-6 grid grid-cols-1 gap-6 md:grid-cols-2">
-        {/* Media picker */}
-        <div>
-          <div className="aspect-[4/3] w-full overflow-hidden rounded-lg ring-1 ring-border bg-elev1 grid place-items-center">
-            {preview ? (
-              file?.type.startsWith('video/') ? (
-                <video src={preview} className="h-full w-full object-cover" controls />
-              ) : (
-                <img src={preview} className="h-full w-full object-cover" />
-              )
-            ) : (
-              <img src={DEFAULT_COVER_URL} className="h-24 w-24 opacity-60" />
-            )}
-          </div>
-          <input ref={pickRef} type="file" accept={ACCEPT} className="hidden" onChange={onPick} />
-          <div className="mt-3 flex items-center gap-3">
-            <button
-              onClick={() => pickRef.current?.click()}
-              className="rounded-lg bg-elev1 px-3 py-1.5 text-sm ring-1 ring-border hover:bg-elev2"
-            >
-              Choose file
-            </button>
-            {file && <span className="text-xs text-subtle">{file.name}</span>}
-          </div>
-
-          {(phase === 'uploading' || phase === 'minting') && (
-            <div className="mt-3 h-2 w-full overflow-hidden rounded bg-elev1 ring-1 ring-border">
-              <div className="h-full bg-brand/60 transition-all" style={{ width: `${pct}%` }} />
-            </div>
-          )}
-        </div>
-
-        {/* Form side */}
-        <div className="space-y-4">
-          <input
-            className="w-full rounded-lg bg-elev1 p-3 ring-1 ring-border focus:ring-brand"
-            placeholder="Title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-          />
-          <textarea
-            className="w-full rounded-lg bg-elev1 p-3 ring-1 ring-border focus:ring-brand min-h-[120px]"
-            placeholder="Description"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-            I am the rights holder or have permission to upload this artwork.
-          </label>
-
-          <div className="rounded-lg bg-elev1 p-3 ring-1 ring-border">
-            <div className="font-medium mb-2">Similarity check</div>
-            {similarBusy ? (
-              <div className="text-sm text-subtle">Checking…</div>
-            ) : similarErr ? (
-              <div className="text-sm text-error">{similarErr}</div>
-            ) : similar.length === 0 ? (
-              <div className="text-sm text-subtle">No matches found.</div>
-            ) : (
-              <>
-                <div className="text-sm mb-2">
-                  Found {similar.length} potential match{similar.length > 1 ? 'es' : ''}. Please review before minting.
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  {similar.map((m) => (
-                    <a
-                      key={`${m.id}-${m.user_id}`}
-                      href={`/user/${m.user_id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block overflow-hidden rounded border border-border"
-                    >
-                      <img src={m.image_url} alt={m.title} className="h-24 w-full object-cover" />
-                      <div className="p-2 text-xs">
-                        <div className="font-medium truncate">{m.title}</div>
-                        <div className="opacity-70 truncate">@{m.username}</div>
-                        {typeof m.score === 'number' && (
-                          <div className="opacity-60">sim: {(m.score * 100).toFixed(0)}%</div>
-                        )}
-                      </div>
-                    </a>
-                  ))}
-                </div>
-                <label className="mt-2 flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={reviewChecked}
-                    onChange={(e) => setReviewChecked(e.target.checked)}
-                  />
-                  I reviewed the possible matches and confirm this upload is original or permitted.
-                </label>
-              </>
-            )}
-          </div>
-
-          {err && <div className="text-error text-sm">{err}</div>}
-
-          <div className="flex gap-3">
-            <button
-              disabled={busy}
-              onClick={publish}
-              className="rounded-lg bg-brand/20 px-4 py-2 text-sm ring-1 ring-brand/50 hover:bg-brand/30"
-            >
-              {phase === 'uploading' ? `Uploading ${pct}%…` : phase === 'minting' ? 'Waiting for wallet…' : 'Publish'}
-            </button>
-            <button
-              disabled={busy}
-              className="rounded-lg bg-elev1 px-4 py-2 text-sm ring-1 ring-border hover:bg-elev2"
-              onClick={() => setErr('Saving drafts will be added next.')}
-            >
-              Save draft
-            </button>
+  if (initializing) {
+    return (
+      <div className="mx-auto max-w-3xl p-6">
+        <Skeleton className="h-8 w-2/3 mb-6" />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <Skeleton className="aspect-square" />
+          <div className="space-y-4">
+            <Skeleton className="h-10" />
+            <Skeleton className="h-28" />
+            <Skeleton className="h-10 w-40" />
           </div>
         </div>
       </div>
+    );
+  }
 
-      {/* Wallet chooser (visual) */}
-      {phase === 'minting' && (
-        <div className="mt-6 rounded-lg border border-border p-4">
-          <div className="mb-2 text-sm uppercase tracking-wide text-subtle">Payment method → Select wallet</div>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between rounded bg-elev1 p-3 ring-1 ring-border">
-              <div className="flex items-center gap-3">
-                <span className="h-6 w-6 rounded bg-orange-500/80 grid place-items-center text-[10px]">MM</span>
-                <div>MetaMask</div>
-              </div>
-              <span className="rounded-full bg-elev2 px-2 py-0.5 text-xs text-subtle">Installed</span>
-            </div>
-            {['Embedded Wallet', 'Base Account', 'Abstract'].map((name) => (
-              <div
-                key={name}
-                className="flex items-center justify-between rounded bg-elev1/60 p-3 ring-1 ring-border/60 opacity-50"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="h-6 w-6 rounded bg-elev2 grid place-items-center text-[10px]">—</span>
-                  <div>{name}</div>
-                </div>
-                <div className="h-4 w-4 rounded-full border border-border" />
-              </div>
-            ))}
-            <div className="mt-2 h-2 w-full overflow-hidden rounded bg-elev1 ring-1 ring-border">
-              <div className="h-full bg-brand/60 transition-all" style={{ width: `${pct}%` }} />
-            </div>
-            {(txHash || tokenId) && (
-              <div className="mt-2 text-sm">
-                {txHash && (
-                  <a className="underline" href={txUrl(txHash)} target="_blank" rel="noreferrer">
-                    View transaction
-                  </a>
-                )}
-                {tokenId && (
-                  <>
-                    <span className="mx-2">•</span>
-                    <a className="underline" href={tokenUrl(tokenId) || '#'} target="_blank" rel="noreferrer">
-                      View token
-                    </a>
-                  </>
-                )}
+  return (
+    <div className="mx-auto max-w-5xl p-6">
+      <h1 className="mb-6 text-2xl font-semibold">Create artwork</h1>
+
+      <form onSubmit={onSubmit} className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        {/* Left: preview + pick */}
+        <div>
+          <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-900">
+            {previewUrl ? (
+              <img src={previewUrl} alt="preview" className="w-full object-cover" />
+            ) : (
+              <div className="aspect-square grid place-items-center text-neutral-500">
+                Select an image or video
               </div>
             )}
           </div>
+
+          <div className="mt-4 flex items-center gap-3">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={ACCEPT}
+              onChange={onPick}
+              className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-white file:px-3 file:py-2 file:text-black"
+            />
+            {file && (
+              <span className="text-xs text-neutral-400">{file.type} • {fmtMB(file.size)}</span>
+            )}
+          </div>
+
+          <div className="mt-3">
+            <button
+              type="button"
+              disabled={!file || checking}
+              onClick={runSimilarityCheck}
+              className="rounded-xl border border-neutral-700 px-3 py-2 text-sm disabled:opacity-60"
+            >
+              {checking ? "Checking…" : "Run similarity check"}
+            </button>
+          </div>
+        </div>
+
+        {/* Right: details */}
+        <div className="space-y-4">
+          <label className="block">
+            <span className="mb-1 block text-sm text-neutral-300">Title</span>
+            <input
+              className="w-full rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Your artwork title"
+              required
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-sm text-neutral-300">Description</span>
+            <textarea
+              className="min-h-[120px] w-full resize-y rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Tell collectors about the piece…"
+            />
+          </label>
+
+          {busy && (
+            <div className="mt-2">
+              <div className="mb-1 text-xs text-neutral-400">Uploading & preparing…</div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-800">
+                <div
+                  className="h-full bg-white transition-all"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {mustConfirmSimilar && candidates && candidates.length > 0 && (
+            <div className="rounded-2xl border border-yellow-600/40 bg-yellow-500/10 p-3 text-sm text-yellow-200">
+              We found possible similar works. Please review below. Only continue if you’re sure
+              this is your original work.
+            </div>
+          )}
+
+          <div className="pt-2">
+            <button
+              className="rounded-xl bg-white px-4 py-2 font-medium text-black disabled:opacity-60"
+              disabled={!canSubmit}
+            >
+              {busy ? "Creating…" : "Create & publish"}
+            </button>
+          </div>
+        </div>
+      </form>
+
+      {/* Similarity results */}
+      {candidates && (
+        <div className="mt-8">
+          <h2 className="mb-3 text-lg font-semibold">Possible matches</h2>
+          {candidates.length === 0 ? (
+            <div className="text-sm text-neutral-400">No similar artworks found.</div>
+          ) : (
+            <ul className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
+              {candidates.map((c) => (
+                <li key={c.id} className="rounded-xl border border-neutral-800 p-3">
+                  <div className="mb-2 aspect-square overflow-hidden rounded-lg bg-neutral-900">
+                    {c.image_url ? (
+                      <img src={c.image_url} className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="grid h-full w-full place-items-center text-xs text-neutral-500">
+                        No preview
+                      </div>
+                    )}
+                  </div>
+                  <div className="truncate text-sm font-medium">{c.title || "Untitled"}</div>
+                  {c.username && (
+                    <div className="truncate text-xs text-neutral-400">@{c.username}</div>
+                  )}
+                  {typeof c.score === "number" && (
+                    <div className="mt-1 text-xs text-neutral-500">score: {c.score}</div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </div>
-  )
+  );
 }

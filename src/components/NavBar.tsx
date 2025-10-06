@@ -1,11 +1,14 @@
 import { Link, useNavigate } from 'react-router-dom'
+import ConnectWallet from './ConnectWallet'
 import { useAuth } from '../state/AuthContext'
 import { useProfile } from '../hooks/useProfile'
 import { supabase } from '../lib/supabase'
 import { DEFAULT_AVATAR_URL } from '../lib/config'
+import { useEffect, useState } from 'react'
 
-function avatarSrc(url?: string | null) {
-  return url && url.length > 0 ? url : DEFAULT_AVATAR_URL
+function avatarLetter(email?: string | null) {
+  if (!email) return 'U'
+  return email.charAt(0).toUpperCase()
 }
 
 export default function NavBar() {
@@ -13,13 +16,22 @@ export default function NavBar() {
   const { profile } = useProfile()
   const nav = useNavigate()
 
+  // bust the avatar cache whenever settings are saved
+  const [bustKey, setBustKey] = useState<number>(0)
+  useEffect(() => {
+    const onUpd = () => setBustKey(Date.now())
+    window.addEventListener('profile-updated', onUpd)
+    return () => window.removeEventListener('profile-updated', onUpd)
+  }, [])
+
   async function onLogout() {
-    await supabase.auth.signOut()
-    nav('/', { replace: true })
+    try { await supabase.auth.signOut() } finally { nav('/', { replace: true }) }
   }
 
-  // ✅ change target to /u/<username>
-  const myProfileHref = profile?.username ? `/u/${profile.username}` : '/account'
+  const myHref = profile?.username ? `/@${profile.username}` : '/settings'
+  const avatarSrc =
+    (profile?.avatar_url ? `${profile.avatar_url}${profile.avatar_url.includes('?') ? '&' : '?'}v=${bustKey}` : null) ||
+    DEFAULT_AVATAR_URL
 
   return (
     <header className="sticky top-0 z-50 h-14 border-b border-border bg-bg/80 backdrop-blur">
@@ -45,17 +57,23 @@ export default function NavBar() {
             </div>
           ) : (
             <div className="flex items-center gap-3">
-              <Link to={myProfileHref} className="flex items-center gap-2">
-                <img
-                  src={avatarSrc(profile?.avatar_url)}
-                  className="h-7 w-7 rounded-full ring-1 ring-border object-cover"
-                  alt="me"
-                />
+              {/* Profile avatar → public profile */}
+              <Link to={myHref} className="flex items-center gap-2">
+                <div className="grid h-7 w-7 place-items-center overflow-hidden rounded-full bg-elev1 ring-1 ring-border">
+                  {profile?.avatar_url ? (
+                    <img src={avatarSrc} className="h-full w-full object-cover" />
+                  ) : (
+                    <span className="text-xs">{avatarLetter(user.email)}</span>
+                  )}
+                </div>
                 <span className="text-sm text-text/85 hover:text-text">Profile</span>
               </Link>
+
               <button onClick={onLogout} className="text-sm text-subtle hover:text-text">Logout</button>
             </div>
           )}
+
+          <ConnectWallet />
         </nav>
       </div>
     </header>
