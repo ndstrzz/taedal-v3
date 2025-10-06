@@ -1,55 +1,46 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../state/AuthContext'
 import { supabase } from '../lib/supabase'
+import { DEFAULT_AVATAR_URL, DEFAULT_COVER_URL } from '../lib/config'
 import { uploadPublicFile } from '../lib/storage'
 
 export default function OnboardingProfile() {
   const { user } = useAuth()
   const nav = useNavigate()
+
+  const [displayName, setDisplayName] = useState('')
+  const [username, setUsername] = useState('')
   const [bio, setBio] = useState('')
-  const [country, setCountry] = useState('')
-  const [currency, setCurrency] = useState('USD')
-  const [website, setWebsite] = useState('')
-  const [instagram, setInstagram] = useState('')
-  const [behance, setBehance] = useState('')
-  const [twitter, setTwitter] = useState('')
-  const [avatarUrl, setAvatarUrl] = useState('')
-  const [coverUrl, setCoverUrl] = useState('')
-  const [err, setErr] = useState('')
+  const [avatarUrl, setAvatarUrl] = useState<string>('')    // string
+  const [coverUrl, setCoverUrl] = useState<string>('')      // string
+
   const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
 
-  const avatarInput = useRef<HTMLInputElement>(null)
-  const coverInput = useRef<HTMLInputElement>(null)
-
-  useEffect(() => { if (!user) nav('/login') }, [user, nav])
-
-  // (optional) Prefill existing profile
   useEffect(() => {
-    (async () => {
-      if (!user) return
+    if (!user) return
+    // Prefill from profiles if exists
+    ;(async () => {
       const { data } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle()
       if (data) {
+        setDisplayName(data.display_name || '')
+        setUsername(data.username || '')
         setBio(data.bio || '')
-        setCountry(data.country || '')
-        setCurrency(data.currency || 'USD')
-        setWebsite(data.website || '')
-        setInstagram(data.instagram || '')
-        setBehance(data.behance || '')
-        setTwitter(data.twitter || '')
         setAvatarUrl(data.avatar_url || '')
         setCoverUrl(data.cover_url || '')
       }
     })()
   }, [user])
 
-  async function onPickAvatar(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file || !user) return
+  async function pickAvatar(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0]
+    if (!f || !user) return
+    setBusy(true); setErr('')
     try {
-      setBusy(true)
-      const url = await uploadPublicFile('avatars', user.id, file)
-      setAvatarUrl(url)
+      // MUST return a string URL
+      const url = await uploadPublicFile('avatars', user.id, f)
+      setAvatarUrl(url) // ✅ string, not object
     } catch (e: any) {
       setErr(e.message || 'Failed to upload avatar')
     } finally {
@@ -57,13 +48,13 @@ export default function OnboardingProfile() {
     }
   }
 
-  async function onPickCover(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file || !user) return
+  async function pickCover(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0]
+    if (!f || !user) return
+    setBusy(true); setErr('')
     try {
-      setBusy(true)
-      const url = await uploadPublicFile('covers', user.id, file)
-      setCoverUrl(url)
+      const url = await uploadPublicFile('covers', user.id, f)
+      setCoverUrl(url) // ✅ string, not object
     } catch (e: any) {
       setErr(e.message || 'Failed to upload cover')
     } finally {
@@ -73,16 +64,22 @@ export default function OnboardingProfile() {
 
   async function save() {
     if (!user) return
-    setErr(''); setBusy(true)
+    if (!username.trim()) { setErr('Username is required'); return }
+    setBusy(true); setErr('')
     try {
-      const { error } = await supabase.from('profiles').update({
-        bio, country, currency, website, instagram, behance, twitter,
-        avatar_url: avatarUrl || null, cover_url: coverUrl || null
-      }).eq('id', user.id)
+      const { error } = await supabase.from('profiles').upsert({
+        id: user.id,
+        username: username.toLowerCase(),
+        display_name: displayName || null,
+        bio: bio || null,
+        avatar_url: avatarUrl || null,
+        cover_url: coverUrl || null,
+        updated_at: new Date().toISOString(),
+      })
       if (error) throw error
-      nav('/', { replace: true })
+      nav(`/@${username.toLowerCase()}`)
     } catch (e: any) {
-      setErr(e?.message || 'Failed to save profile')
+      setErr(e.message || 'Failed to save')
     } finally {
       setBusy(false)
     }
@@ -90,52 +87,45 @@ export default function OnboardingProfile() {
 
   return (
     <div className="mx-auto max-w-3xl p-6">
-      <h1 className="mb-2 text-h1">Complete your profile</h1>
-      <p className="mb-6 text-subtle">Optional, but helps collectors recognize you.</p>
+      <h1 className="text-h1 mb-2">Set up your profile</h1>
+      <p className="text-subtle mb-6">Welcome to Taedal.</p>
 
       <div className="mb-6 grid grid-cols-1 gap-6 md:grid-cols-3">
         <div className="flex flex-col items-center gap-3">
           <div className="h-24 w-24 overflow-hidden rounded-full ring-1 ring-border">
-            {avatarUrl ? <img src={avatarUrl} alt="avatar" className="h-full w-full object-cover" /> : <div className="h-full w-full bg-elev1" />}
+            <img src={avatarUrl || DEFAULT_AVATAR_URL} className="h-full w-full object-cover" />
           </div>
-          <input ref={avatarInput} type="file" accept="image/*" className="hidden" onChange={onPickAvatar}/>
-          <button onClick={() => avatarInput.current?.click()}
-            className="rounded-lg bg-elev1 px-3 py-1.5 text-sm ring-1 ring-border hover:bg-elev2">Upload avatar</button>
+          <label className="rounded-lg bg-elev1 px-3 py-1.5 text-sm ring-1 ring-border hover:bg-elev2 cursor-pointer">
+            <input type="file" accept="image/*" className="hidden" onChange={pickAvatar} />
+            Upload avatar
+          </label>
         </div>
 
         <div className="md:col-span-2">
           <div className="h-32 w-full overflow-hidden rounded-lg ring-1 ring-border">
-            {coverUrl ? <img src={coverUrl} alt="cover" className="h-full w-full object-cover" /> : <div className="h-full w-full bg-elev1" />}
+            <img src={coverUrl || DEFAULT_COVER_URL} className="h-full w-full object-cover" />
           </div>
-          <input ref={coverInput} type="file" accept="image/*" className="hidden" onChange={onPickCover}/>
           <div className="mt-2">
-            <button onClick={() => coverInput.current?.click()}
-              className="rounded-lg bg-elev1 px-3 py-1.5 text-sm ring-1 ring-border hover:bg-elev2">Upload cover</button>
+            <label className="rounded-lg bg-elev1 px-3 py-1.5 text-sm ring-1 ring-border hover:bg-elev2 cursor-pointer">
+              <input type="file" accept="image/*" className="hidden" onChange={pickCover} />
+              Upload cover
+            </label>
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <textarea
-          placeholder="Short bio (≤ 160 chars)"
-          value={bio}
-          onChange={e => setBio(e.target.value.slice(0,160))}
-          className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:outline-none focus:ring-brand md:col-span-2 min-h-[96px]"
-        />
-        <input placeholder="Country/Region" value={country} onChange={e => setCountry(e.target.value)}
-          className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:outline-none focus:ring-brand" />
-        <input placeholder="Preferred currency (e.g., USD, SGD)" value={currency}
-          onChange={e => setCurrency(e.target.value.toUpperCase())}
-          className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:outline-none focus:ring-brand" />
-        <input placeholder="Website / Portfolio" value={website} onChange={e => setWebsite(e.target.value)}
-          className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:outline-none focus:ring-brand md:col-span-2" />
-        <input placeholder="Instagram" value={instagram} onChange={e => setInstagram(e.target.value)}
-          className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:outline-none focus:ring-brand" />
-        <input placeholder="Behance" value={behance} onChange={e => setBehance(e.target.value)}
-          className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:outline-none focus:ring-brand" />
-        <input placeholder="X / Twitter" value={twitter} onChange={e => setTwitter(e.target.value)}
-          className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:outline-none focus:ring-brand md:col-span-2" />
+        <input className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:ring-brand"
+               placeholder="Display name"
+               value={displayName} onChange={e=>setDisplayName(e.target.value)} />
+        <input className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:ring-brand"
+               placeholder="username"
+               value={username} onChange={e=>setUsername(e.target.value.toLowerCase())} />
       </div>
+
+      <textarea className="mt-4 min-h-[96px] w-full rounded-lg bg-elev1 p-3 ring-1 ring-border focus:ring-brand"
+                placeholder="Short bio"
+                value={bio} onChange={e=>setBio(e.target.value.slice(0,160))} />
 
       {err && <div className="mt-3 text-sm text-error">{err}</div>}
 
@@ -144,9 +134,7 @@ export default function OnboardingProfile() {
           className="rounded-lg bg-brand/20 px-4 py-2 text-sm ring-1 ring-brand/50 hover:bg-brand/30">
           {busy ? 'Saving…' : 'Save & Continue'}
         </button>
-        <button onClick={() => nav('/', { replace: true })} className="text-sm text-subtle hover:text-text">
-          Skip for now
-        </button>
+        <button onClick={()=>nav(-1)} className="text-sm text-subtle hover:text-text">Cancel</button>
       </div>
     </div>
   )
