@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../state/AuthContext'
 
@@ -10,7 +10,6 @@ export default function Login() {
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const nav = useNavigate()
   const loc = useLocation() as any
   const { error: bootError } = useAuth()
 
@@ -25,22 +24,10 @@ export default function Login() {
     setBusy(true)
     try {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
-      if (error) {
-        // Common case when email confirmation is enabled
-        if (/confirm/i.test(error.message)) {
-          setErr('Please confirm your email first. Check your inbox.')
-          return
-        }
-        throw error
-      }
+      if (error) throw error
 
-      // Navigate home; quick fallback to force UI to pick up session if needed
-      nav('/', { replace: true })
-      setTimeout(() => {
-        if (window.location.pathname !== '/') {
-          window.location.replace('/')
-        }
-      }, 0)
+      // ✅ Force a full reload into the app so the session is present immediately
+      window.location.assign('/create') // or '/' if you prefer landing on home
     } catch (e: any) {
       setErr(e?.message ?? 'Failed to sign in')
     } finally {
@@ -86,26 +73,17 @@ export default function Login() {
           required
         />
         {err && <div className="text-error text-sm">{err}</div>}
-        <button
-          disabled={busy}
-          className="w-full rounded-lg bg-brand/20 p-3 text-sm ring-1 ring-brand/50 hover:bg-brand/30"
-        >
+        <button disabled={busy} className="w-full rounded-lg bg-brand/20 p-3 text-sm ring-1 ring-brand/50 hover:bg-brand/30">
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
 
-      <button
-        onClick={loginWithGoogle}
-        className="mt-4 w-full rounded-lg bg-elev1 p-3 text-sm ring-1 ring-border hover:bg-elev2"
-      >
+      <button onClick={loginWithGoogle} className="mt-4 w-full rounded-lg bg-elev1 p-3 text-sm ring-1 ring-border hover:bg-elev2">
         Continue with Google
       </button>
 
       <p className="mt-4 text-sm text-subtle">
-        Don’t have an account?{' '}
-        <Link to="/signup" className="text-text underline">
-          Sign up
-        </Link>
+        Don’t have an account? <Link to="/signup" className="text-text underline">Sign up</Link>
       </p>
     </div>
   )
