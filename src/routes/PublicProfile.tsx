@@ -1,4 +1,3 @@
-// src/routes/PublicProfile.tsx
 import { useParams, Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
@@ -20,19 +19,28 @@ export default function PublicProfile() {
   const { user } = useAuth()
   const [p, setP] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState<string | null>(null)
 
   useEffect(() => {
     let mounted = true
     ;(async () => {
       setLoading(true)
-      if (!handle) { setP(null); setLoading(false); return }
-      const uname = handle.replace(/^@/, '')
-      const { data } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('username', uname)
-        .maybeSingle()
-      if (mounted) { setP((data as any) || null); setLoading(false) }
+      setErr(null)
+      try {
+        if (!handle) { setP(null); setLoading(false); return }
+        const uname = handle.replace(/^@/,'')
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('username', uname)
+          .maybeSingle()
+        if (error) throw error
+        if (mounted) setP((data as any) || null)
+      } catch (e: any) {
+        if (mounted) setErr(e?.message || 'Failed to load profile')
+      } finally {
+        if (mounted) setLoading(false)
+      }
     })()
     return () => { mounted = false }
   }, [handle])
@@ -44,7 +52,18 @@ export default function PublicProfile() {
   if (loading) {
     return (
       <div className="mx-auto max-w-5xl p-6">
+        <Helmet><title>{title}</title></Helmet>
         <div className="text-subtle">Loading…</div>
+      </div>
+    )
+  }
+
+  if (err) {
+    return (
+      <div className="mx-auto max-w-5xl p-6">
+        <Helmet><title>{title}</title></Helmet>
+        <div className="text-h2 mb-2">Error</div>
+        <div className="text-subtle">{err}</div>
       </div>
     )
   }
@@ -90,7 +109,6 @@ export default function PublicProfile() {
 
         {p.bio && <p className="mt-4 max-w-2xl text-body">{p.bio}</p>}
 
-        {/* Grid of artworks can go here in the future */}
         <div className="mt-8 text-subtle">Artworks will appear here.</div>
       </div>
     </>
