@@ -144,17 +144,15 @@ export default function SettingsProfile() {
         <button onClick={()=>nav(-1)} className="text-sm text-subtle hover:text-text">Cancel</button>
       </div>
 
-      {/* Crop modals */}
       {cropFor && cropFile && (
-        <CropModal
-          file={cropFile}
-          aspect={cropFor === 'avatar' ? 1 : 2.5}   // avatar 1:1, cover 5:2 ~ 2.5
-          maxOutput={cropFor === 'avatar' ? 512 : 1600}
-          title={cropFor === 'avatar' ? 'Crop avatar' : 'Crop cover'}
-          onCancel={() => { setCropFor(null); setCropFile(null) }}
-          onConfirm={handleCropped}
-        />
-      )}
+  <CropModal
+    file={cropFile}
+    mode={cropFor}               // 'avatar' | 'cover'
+    onCancel={() => { setCropFor(null); setCropFile(null) }}
+    onConfirm={handleCropped}    // you already have this
+  />
+)}
+
     </div>
   )
 }
