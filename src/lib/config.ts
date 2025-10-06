@@ -6,6 +6,8 @@ type WConf = {
   DEFAULT_AVATAR_URL?: string;
   CHAIN_ID?: number | string;
   NFT_ADDRESS?: string;
+  NFT_MINT_PRICE_WEI?: string;  // optional
+  NFT_MINT_PRICE_ETH?: string;  // optional (decimal string)
 };
 
 const WIN: WConf =
@@ -49,3 +51,16 @@ export const CHAIN_ID =
 export const NFT_ADDRESS = (
   WIN.NFT_ADDRESS || (VITE.VITE_NFT_ADDRESS as string) || (CRA.REACT_APP_NFT_ADDRESS as string) || ""
 ).trim();
+
+/** Optional mint price. Prefer WEI; ETH is a convenience. */
+export const NFT_MINT_PRICE_WEI =
+  (WIN.NFT_MINT_PRICE_WEI as string) ||
+  (VITE.VITE_NFT_MINT_PRICE_WEI as string) ||
+  (CRA.REACT_APP_NFT_MINT_PRICE_WEI as string) ||
+  "";
+
+export const NFT_MINT_PRICE_ETH =
+  (WIN.NFT_MINT_PRICE_ETH as string) ||
+  (VITE.VITE_NFT_MINT_PRICE_ETH as string) ||
+  (CRA.REACT_APP_NFT_MINT_PRICE_ETH as string) ||
+  "";
