@@ -1,3 +1,4 @@
+// src/pages/SettingsProfile.tsx
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
@@ -27,7 +28,11 @@ export default function SettingsProfile() {
   useEffect(() => {
     if (!user) return
     ;(async () => {
-      const { data } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle()
+      const { data } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle()
       if (data) {
         setDisplayName(data.display_name || '')
         setUsername(data.username || '')
@@ -49,7 +54,7 @@ export default function SettingsProfile() {
     }
   }
 
-  // add a cache-buster so CDN shows the fresh file immediately
+  // cache-buster so the CDN shows the fresh file immediately
   function bust(url: string) {
     const sep = url.includes('?') ? '&' : '?'
     return `${url}${sep}v=${Date.now()}`
@@ -82,8 +87,9 @@ export default function SettingsProfile() {
     if (!username.trim()) { setErr('Username is required'); return }
     setBusy(true); setErr('')
     try {
+      const uname = username.toLowerCase()
       const { error } = await supabase.from('profiles').update({
-        username: username.toLowerCase(),
+        username: uname,
         display_name: displayName || null,
         bio: bio || null,
         avatar_url: avatarUrl || null,
@@ -92,11 +98,11 @@ export default function SettingsProfile() {
       }).eq('id', user.id)
       if (error) throw error
 
-      // 🔔 tell the app to refresh profile (navbar avatar etc.)
+      // notify app to refresh any profile consumers (navbar avatar, etc.)
       window.dispatchEvent(new Event('profile-updated'))
 
-      // go to public profile
-      nav(`/@${username.toLowerCase()}`, { replace: true })
+      // ✅ go to new public profile route
+      nav(`/u/${uname}`, { replace: true })
     } catch (e: any) {
       setErr(e.message || 'Failed to save profile')
     } finally {

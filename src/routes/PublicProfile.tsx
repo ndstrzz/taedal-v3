@@ -15,7 +15,7 @@ type Profile = {
 
 export default function PublicProfile() {
   const { handle } = useParams()
-  const uname = (handle || '').replace(/^@/, '').toLowerCase()
+  const uname = (handle || '').toLowerCase()
 
   const [p, setP] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)

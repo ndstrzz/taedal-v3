@@ -18,12 +18,12 @@ export default function NavBar() {
     nav('/', { replace: true })
   }
 
-  const myProfileHref = profile?.username ? `/@${profile.username}` : '/account'
+  // ✅ change target to /u/<username>
+  const myProfileHref = profile?.username ? `/u/${profile.username}` : '/account'
 
   return (
     <header className="sticky top-0 z-50 h-14 border-b border-border bg-bg/80 backdrop-blur">
       <div className="mx-auto flex h-full max-w-6xl items-center justify-between px-4">
-        {/* logo → home */}
         <Link to="/" className="flex items-center gap-3">
           <img src="/brand/taedal-logo.svg" className="h-6 w-6 rounded-md ring-1 ring-brand/40" alt="logo" />
           <span className="text-body font-medium tracking-wide">taedal</span>
@@ -45,7 +45,6 @@ export default function NavBar() {
             </div>
           ) : (
             <div className="flex items-center gap-3">
-              {/* avatar → public profile (or account if username missing) */}
               <Link to={myProfileHref} className="flex items-center gap-2">
                 <img
                   src={avatarSrc(profile?.avatar_url)}
