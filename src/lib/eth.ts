@@ -1,14 +1,8 @@
-import {
-  BrowserProvider,
-  Contract,
-  JsonRpcSigner,
-  parseUnits,
-  isHexString,
-} from "ethers";
+import { BrowserProvider, Contract, JsonRpcSigner } from "ethers";
 import { CHAIN_ID, NFT_ADDRESS } from "./config";
 
 // --- Minimal ABIs for common mint functions ---
-// Adjust/add signatures here to match your contract
+// Add/adjust signatures here to match your contract.
 const CANDIDATE_ABIS = [
   // 1) safeMint(to, tokenURI)
   [
@@ -50,14 +44,12 @@ export async function getMetaMaskProvider(): Promise<BrowserProvider> {
   if (!window.ethereum) {
     throw new WalletError("MetaMask not detected");
   }
-  const provider = new BrowserProvider(window.ethereum);
-  return provider;
+  return new BrowserProvider(window.ethereum);
 }
 
-export async function ensureConnectedOnChain(provider: BrowserProvider): Promise<{
-  signer: JsonRpcSigner;
-  address: string;
-}> {
+export async function ensureConnectedOnChain(
+  provider: BrowserProvider
+): Promise<{ signer: JsonRpcSigner; address: string }> {
   await provider.send("eth_requestAccounts", []);
   const signer = await provider.getSigner();
   const address = await signer.getAddress();
@@ -69,7 +61,6 @@ export async function ensureConnectedOnChain(provider: BrowserProvider): Promise
         { chainId: "0x" + Number(CHAIN_ID).toString(16) },
       ]);
     } catch (e: any) {
-      // chain not added → optional: addChain code goes here
       throw new WalletError(
         `Wrong network. Please switch to chain ${CHAIN_ID}.`,
         e?.code
@@ -80,28 +71,42 @@ export async function ensureConnectedOnChain(provider: BrowserProvider): Promise
   return { signer, address };
 }
 
-function pickContract(address: string, signer: JsonRpcSigner): {
-  contract: Contract;
-  fn: "safeMint_addr" | "mint_addr" | "mint" | "safeMint";
-} {
+/**
+ * Probe the contract for a supported mint signature using ethers v6 API.
+ */
+function pickContract(
+  address: string,
+  signer: JsonRpcSigner
+): { contract: Contract; fn: "safeMint_addr" | "mint_addr" | "mint" | "safeMint" } {
   for (const abi of CANDIDATE_ABIS) {
     const c = new Contract(address, abi, signer);
-    // probe function existence
-    const fns = Object.keys(c.interface.functions);
-    if (fns.some((f) => f.startsWith("safeMint(address,string)"))) {
+    const I = c.interface;
+
+    const has = (signature: string) => {
+      try {
+        I.getFunction(signature); // throws if not found
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    if (has("safeMint(address,string)")) {
       return { contract: c, fn: "safeMint_addr" };
     }
-    if (fns.some((f) => f.startsWith("mint(address,string)"))) {
+    if (has("mint(address,string)")) {
       return { contract: c, fn: "mint_addr" };
     }
-    if (fns.some((f) => f.startsWith("mint(string)"))) {
+    if (has("mint(string)")) {
       return { contract: c, fn: "mint" };
     }
-    if (fns.some((f) => f.startsWith("safeMint(string)"))) {
+    if (has("safeMint(string)")) {
       return { contract: c, fn: "safeMint" };
     }
   }
-  throw new WalletError("Mint function not found in ABI — update eth.ts ABI list to match your contract.");
+  throw new WalletError(
+    "Mint function not found in ABI — update eth.ts CANDIDATE_ABIS to match your contract."
+  );
 }
 
 export async function mintWithMetaMask(
@@ -115,7 +120,7 @@ export async function mintWithMetaMask(
 
   const { contract, fn } = pickContract(NFT_ADDRESS, signer);
 
-  let tx;
+  let tx: any;
   if (fn === "safeMint_addr" || fn === "mint_addr") {
     tx = await (contract as any)[fn === "safeMint_addr" ? "safeMint" : "mint"](
       address,
@@ -126,10 +131,11 @@ export async function mintWithMetaMask(
   }
 
   const receipt = await tx.wait();
-  // try to find Transfer(to=address) and pick tokenId
+
+  // Try to extract tokenId from Transfer event
   let tokenId: string | null = null;
   try {
-    const transferLogs = receipt.logs
+    const parsed = receipt.logs
       .map((l: any) => {
         try {
           return contract.interface.parseLog(l);
@@ -140,12 +146,11 @@ export async function mintWithMetaMask(
       .filter(Boolean)
       .filter((ev: any) => ev?.name === "Transfer");
 
-    const selfTransfer = transferLogs.find(
+    const selfTransfer = parsed.find(
       (ev: any) => ev?.args?.to?.toLowerCase?.() === address.toLowerCase()
     );
     if (selfTransfer) {
-      const id = selfTransfer.args?.tokenId?.toString?.();
-      tokenId = id || null;
+      tokenId = selfTransfer.args?.tokenId?.toString?.() ?? null;
     }
   } catch {
     tokenId = null;
