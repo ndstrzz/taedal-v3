@@ -3,5 +3,9 @@
     "dev": "concurrently -k -n api,web -c magenta,cyan \"node server/index.cjs\" \"vite\"",
     "build": "vite build",
     "preview": "vite preview --port 4173"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.4",
+    "vite": "^7.1.9"
   }
 }
