@@ -1,33 +1,35 @@
-import { Canvas } from '@react-three/fiber'
-import { OrbitControls, Float, MeshDistortMaterial } from '@react-three/drei'
-import { EffectComposer, Bloom } from '@react-three/postprocessing'
-import { flags } from '../lib/featureFlags'
-import { Suspense } from 'react'
+import { Canvas, useFrame } from '@react-three/fiber'
+import { OrbitControls } from '@react-three/drei'
+import { Suspense, useRef } from 'react'
+import * as THREE from 'three'
 
 function Blob() {
+  const mesh = useRef<THREE.Mesh>(null!)
+  useFrame((_, dt) => {
+    if (!mesh.current) return
+    mesh.current.rotation.y += dt * 0.3
+    mesh.current.rotation.x += dt * 0.15
+  })
   return (
-    <mesh>
-      <icosahedronGeometry args={[1, 32]} />
-      <MeshDistortMaterial distort={0.35} speed={1.2} roughness={0.2} />
+    <mesh ref={mesh}>
+      <icosahedronGeometry args={[1.2, 2]} />
+      <meshStandardMaterial roughness={0.35} metalness={0.4} color="#cfd4ff" />
     </mesh>
   )
 }
 
 export default function Hero3D() {
   return (
-    <div className="h-[60vh] w-full rounded-xl bg-elev1 shadow-card">
-      <Canvas camera={{ position: [0, 0, 3], fov: 50 }}>
-        <color attach="background" args={['#0b0b0c']} />
-        <ambientLight intensity={1.2} />
-        <Float speed={1.5} rotationIntensity={0.6} floatIntensity={1.2}>
+    <div className="relative mx-auto w-full max-w-5xl overflow-hidden rounded-xl ring-1 ring-border">
+      <Canvas camera={{ position: [0, 0, 4], fov: 45 }}>
+        <color attach="background" args={['#0e0f12']} />
+        <ambientLight intensity={0.6} />
+        <directionalLight position={[2, 2, 2]} intensity={1.2} />
+        <directionalLight position={[-2, -1, -2]} intensity={0.4} />
+        <Suspense fallback={null}>
           <Blob />
-        </Float>
-        <OrbitControls enableZoom={false} />
-        {flags.postprocessing && (
-          <EffectComposer>
-            <Bloom luminanceThreshold={0.25} intensity={0.6} />
-          </EffectComposer>
-        )}
+        </Suspense>
+        <OrbitControls enablePan={false} enableZoom={false} />
       </Canvas>
     </div>
   )
