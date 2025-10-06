@@ -18,8 +18,11 @@ function Blob() {
   )
 }
 
-// Temporary stub: remove three/r3f/drei at build time
+// Temporary placeholder to keep TypeScript happy without drei/three deps
 export default function Hero3D() {
-  return null; // (or return a tiny SVG/placeholder if you want)
+  return (
+    <div className="aspect-[4/3] w-full rounded-xl bg-elev1 ring-1 ring-border grid place-items-center">
+      <div className="text-subtle text-sm">3D hero temporarily disabled</div>
+    </div>
+  )
 }
-

@@ -2,6 +2,7 @@ import { useParams } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { Helmet } from 'react-helmet-async'
+import { DEFAULT_AVATAR_URL, DEFAULT_COVER_URL } from '../lib/config'
 
 type Profile = {
   id: string
@@ -13,16 +14,17 @@ type Profile = {
 }
 
 export default function PublicProfile() {
-  const { handle } = useParams() // route like /@:handle
+  const { handle } = useParams<{ handle: string }>()
   const [p, setP] = useState<Profile | null>(null)
 
   useEffect(() => {
     if (!handle) return
     ;(async () => {
+      const uname = handle.replace(/^@/, '')
       const { data } = await supabase
         .from('profiles')
         .select('*')
-        .eq('username', handle.replace(/^@/, ''))
+        .eq('username', uname)
         .maybeSingle()
       setP(data as any)
     })()
@@ -30,27 +32,35 @@ export default function PublicProfile() {
 
   const title = p?.display_name
     ? `${p.display_name} (@${p.username}) – Taedal`
-    : handle ? `@${handle.replace(/^@/,'')} – Taedal` : 'Profile – Taedal'
+    : handle
+    ? `@${handle.replace(/^@/,'')} – Taedal`
+    : 'Profile – Taedal'
 
   return (
     <>
-      <Helmet>
-        <title>{title}</title>
-      </Helmet>
+      <Helmet><title>{title}</title></Helmet>
 
       <div className="mx-auto max-w-5xl p-6">
         <div className="h-40 w-full overflow-hidden rounded-lg ring-1 ring-border bg-elev1">
-          {p?.cover_url && <img src={p.cover_url} className="h-full w-full object-cover" />}
+          <img
+            src={p?.cover_url || DEFAULT_COVER_URL}
+            className="h-full w-full object-cover"
+          />
         </div>
+
         <div className="mt-4 flex items-center gap-4">
           <div className="h-20 w-20 overflow-hidden rounded-full ring-1 ring-border bg-elev1">
-            {p?.avatar_url && <img src={p.avatar_url} className="h-full w-full object-cover" />}
+            <img
+              src={p?.avatar_url || DEFAULT_AVATAR_URL}
+              className="h-full w-full object-cover"
+            />
           </div>
           <div>
             <div className="text-h2">{p?.display_name || 'Untitled'}</div>
-            <div className="text-subtle">@{p?.username}</div>
+            <div className="text-subtle">@{p?.username || handle?.replace(/^@/,'')}</div>
           </div>
         </div>
+
         {p?.bio && <p className="mt-4 max-w-2xl text-body">{p.bio}</p>}
       </div>
     </>

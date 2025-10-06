@@ -1,20 +1,20 @@
-import { Navigate } from 'react-router-dom'
+import { type ReactNode } from 'react'
+import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../state/AuthContext'
 
-export default function Protected({ children }: { children: React.ReactNode }) {
+type ProtectedProps = {
+  children: ReactNode
+  /** where to send unauthenticated users */
+  redirectTo?: string
+}
+
+export default function Protected({ children, redirectTo = '/login' }: ProtectedProps) {
   const { user, loading } = useAuth()
+  const loc = useLocation()
 
-  if (loading) {
-    return (
-      <div className="mx-auto max-w-3xl p-6 text-subtle">
-        Loading…
-      </div>
-    )
-  }
-
+  if (loading) return null // or a spinner/skeleton
   if (!user) {
-    return <Navigate to="/login" replace state={{ notice: 'Please log in to continue.' }} />
+    return <Navigate to={redirectTo} replace state={{ from: loc }} />
   }
-
   return <>{children}</>
 }
