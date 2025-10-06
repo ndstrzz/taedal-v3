@@ -6,47 +6,78 @@ import {
   NFT_MINT_PRICE_ETH,
 } from "./config";
 
-const CANDIDATE_ABIS = [
-  // Mint with tokenURI
+/**
+ * We support many common mint shapes. Each ABI group includes the function(s)
+ * we need plus Transfer so we can read tokenId from logs.
+ * Add your exact signature here if you find it on Etherscan.
+ */
+const ABI_GROUPS: string[][] = [
+  // With tokenURI, explicit recipient
   [
-    "function safeMint(address to, string uri) public returns (uint256)",
-    "function tokenURI(uint256 id) view returns (string)",
+    "function safeMint(address to, string uri) public payable returns (uint256)",
     "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
   ],
   [
-    "function mint(address to, string uri) public returns (uint256)",
-    "function tokenURI(uint256 id) view returns (string)",
+    "function mint(address to, string uri) public payable returns (uint256)",
+    "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
+  ],
+  // With tokenURI, to msg.sender
+  [
+    "function mint(string uri) public payable returns (uint256)",
     "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
   ],
   [
-    "function mint(string uri) public returns (uint256)",
-    "function tokenURI(uint256 id) view returns (string)",
+    "function safeMint(string uri) public payable returns (uint256)",
+    "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
+  ],
+  // Popular aliases
+  [
+    "function publicMint(string uri) public payable returns (uint256)",
     "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
   ],
   [
-    "function safeMint(string uri) public returns (uint256)",
-    "function tokenURI(uint256 id) view returns (string)",
+    "function mintNFT(string uri) public payable returns (uint256)",
     "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
   ],
-  // Two-step pattern: mint(to) then setTokenURI(id, uri)
   [
-    "function safeMint(address to) public returns (uint256)",
+    "function mintToken(string uri) public payable returns (uint256)",
+    "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
+  ],
+  [
+    "function mintTo(address to, string uri) public payable returns (uint256)",
+    "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
+  ],
+  [
+    "function safeMintTo(address to, string uri) public payable returns (uint256)",
+    "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
+  ],
+
+  // Two-step: mint then setTokenURI
+  [
+    "function mint(address to) public payable returns (uint256)",
     "function setTokenURI(uint256 id, string uri) public",
     "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
   ],
   [
-    "function mint(address to) public returns (uint256)",
+    "function safeMint(address to) public payable returns (uint256)",
     "function setTokenURI(uint256 id, string uri) public",
     "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
   ],
   [
-    "function mint() public returns (uint256)",
+    "function mint() public payable returns (uint256)",
     "function setTokenURI(uint256 id, string uri) public",
     "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
   ],
   [
-    "function safeMint() public returns (uint256)",
+    "function safeMint() public payable returns (uint256)",
     "function setTokenURI(uint256 id, string uri) public",
+    "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
+  ],
+
+  // Optional helpers some contracts expose; we probe these later when present
+  [
+    "function mintPrice() view returns (uint256)",
+    "function price() view returns (uint256)",
     "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
   ],
 ];
@@ -66,9 +97,7 @@ declare global {
 }
 
 export async function getMetaMaskProvider(): Promise<BrowserProvider> {
-  if (!window.ethereum) {
-    throw new WalletError("MetaMask not detected");
-  }
+  if (!window.ethereum) throw new WalletError("MetaMask not detected");
   return new BrowserProvider(window.ethereum);
 }
 
@@ -92,11 +121,10 @@ export async function ensureConnectedOnChain(
       );
     }
   }
-
   return { signer, address };
 }
 
-function getMintValue() {
+function cfgValue() {
   if (NFT_MINT_PRICE_WEI && /^\d+$/.test(NFT_MINT_PRICE_WEI)) {
     return BigInt(NFT_MINT_PRICE_WEI);
   }
@@ -106,15 +134,14 @@ function getMintValue() {
   return undefined;
 }
 
-/** Resolve supported shape + plan how to call. */
-function planMint(
-  c: Contract
-):
-  | { kind: "withURI_to"; fn: "safeMint" | "mint" }
-  | { kind: "withURI_self"; fn: "safeMint" | "mint" }
-  | { kind: "twoStep_to"; fn: "safeMint" | "mint" }
-  | { kind: "twoStep_self"; fn: "safeMint" | "mint" } {
-  const I = c.interface;
+type Plan =
+  | { type: "withURI_to"; name: string }
+  | { type: "withURI_self"; name: string }
+  | { type: "twoStep_to"; name: string }
+  | { type: "twoStep_self"; name: string };
+
+function planFor(contract: Contract): Plan | null {
+  const I = contract.interface;
   const has = (sig: string) => {
     try {
       I.getFunction(sig);
@@ -124,26 +151,54 @@ function planMint(
     }
   };
 
-  if (has("safeMint(address,string)")) return { kind: "withURI_to", fn: "safeMint" };
-  if (has("mint(address,string)")) return { kind: "withURI_to", fn: "mint" };
-  if (has("mint(string)")) return { kind: "withURI_self", fn: "mint" };
-  if (has("safeMint(string)")) return { kind: "withURI_self", fn: "safeMint" };
+  // with URI
+  if (has("safeMint(address,string)")) return { type: "withURI_to", name: "safeMint" };
+  if (has("mint(address,string)")) return { type: "withURI_to", name: "mint" };
+  if (has("publicMint(string)")) return { type: "withURI_self", name: "publicMint" };
+  if (has("mintNFT(string)")) return { type: "withURI_self", name: "mintNFT" };
+  if (has("mintToken(string)")) return { type: "withURI_self", name: "mintToken" };
+  if (has("mintTo(address,string)")) return { type: "withURI_to", name: "mintTo" };
+  if (has("safeMintTo(address,string)")) return { type: "withURI_to", name: "safeMintTo" };
+  if (has("mint(string)")) return { type: "withURI_self", name: "mint" };
+  if (has("safeMint(string)")) return { type: "withURI_self", name: "safeMint" };
 
-  if (has("safeMint(address)") && has("setTokenURI(uint256,string)"))
-    return { kind: "twoStep_to", fn: "safeMint" };
-  if (has("mint(address)") && has("setTokenURI(uint256,string)"))
-    return { kind: "twoStep_to", fn: "mint" };
-  if (has("mint()") && has("setTokenURI(uint256,string)"))
-    return { kind: "twoStep_self", fn: "mint" };
-  if (has("safeMint()") && has("setTokenURI(uint256,string)"))
-    return { kind: "twoStep_self", fn: "safeMint" };
+  // two-step
+  if (has("setTokenURI(uint256,string)")) {
+    if (has("safeMint(address)")) return { type: "twoStep_to", name: "safeMint" };
+    if (has("mint(address)")) return { type: "twoStep_to", name: "mint" };
+    if (has("safeMint()")) return { type: "twoStep_self", name: "safeMint" };
+    if (has("mint()")) return { type: "twoStep_self", name: "mint" };
+  }
 
-  throw new WalletError(
-    "Mint function not found. Please update CANDIDATE_ABIS to match your contract."
-  );
+  return null;
 }
 
-function extractTokenIdFromReceipt(c: Contract, receipt: any, toAddr: string) {
+async function tryReadMintPrice(c: Contract): Promise<bigint | undefined> {
+  const I = c.interface;
+  const can = (name: string) => {
+    try {
+      I.getFunction(name);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  try {
+    if (can("mintPrice()")) {
+      const v: bigint = await (c as any).mintPrice();
+      return v;
+    }
+    if (can("price()")) {
+      const v: bigint = await (c as any).price();
+      return v;
+    }
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
+function tokenIdFromReceipt(c: Contract, receipt: any, toAddr: string) {
   try {
     const parsed = receipt.logs
       .map((l: any) => {
@@ -155,10 +210,10 @@ function extractTokenIdFromReceipt(c: Contract, receipt: any, toAddr: string) {
       })
       .filter(Boolean)
       .filter((ev: any) => ev?.name === "Transfer");
-    const selfTransfer = parsed.find(
+    const mine = parsed.find(
       (ev: any) => ev?.args?.to?.toLowerCase?.() === toAddr.toLowerCase()
     );
-    return selfTransfer?.args?.tokenId?.toString?.() ?? null;
+    return mine?.args?.tokenId?.toString?.() ?? null;
   } catch {
     return null;
   }
@@ -173,92 +228,121 @@ export async function mintWithMetaMask(
   const provider = await getMetaMaskProvider();
   const { signer, address } = await ensureConnectedOnChain(provider);
 
-  // Build a contract from any candidate ABI that fits
+  // Build a contract that matches any known ABI group
   let contract: Contract | null = null;
-  let plan: ReturnType<typeof planMint> | null = null;
+  for (const abi of ABI_GROUPS) {
+    contract = new Contract(NFT_ADDRESS, abi, signer);
+    const p = planFor(contract);
+    if (p) break;
+  }
+  if (!contract) throw new WalletError("Could not resolve a mint function for this contract.");
+  const plan = planFor(contract)!;
 
-  for (const abi of CANDIDATE_ABIS) {
-    const c = new Contract(NFT_ADDRESS, abi, signer);
-    try {
-      const p = planMint(c);
-      contract = c;
-      plan = p;
-      break;
-    } catch {
-      continue;
+  // Decide value: contract.mintPrice() or config or undefined
+  const detected = await tryReadMintPrice(contract);
+  const value = detected ?? cfgValue();
+
+  // Preflight: try both (with/without value) depending on plan to avoid “missing revert data”
+  const tryStatic = async (withValue: boolean) => {
+    const opt = withValue && value !== undefined ? { value } : {};
+    switch (plan.type) {
+      case "withURI_to":
+        await (contract as any)[plan.name].staticCall(address, tokenURI, opt);
+        break;
+      case "withURI_self":
+        await (contract as any)[plan.name].staticCall(tokenURI, opt);
+        break;
+      case "twoStep_to":
+        await (contract as any)[plan.name].staticCall(address, opt);
+        break;
+      case "twoStep_self":
+        await (contract as any)[plan.name].staticCall(opt);
+        break;
     }
-  }
-  if (!contract || !plan) {
-    throw new WalletError("Could not resolve a mint method for this contract.");
-  }
+  };
 
-  const value = getMintValue();
-
-  // Preflight: static call to reveal revert reasons
   try {
-    if (plan.kind === "withURI_to") {
-      await (contract as any)[plan.fn].staticCall(address, tokenURI, value ? { value } : {});
-    } else if (plan.kind === "withURI_self") {
-      await (contract as any)[plan.fn].staticCall(tokenURI, value ? { value } : {});
-    } else if (plan.kind === "twoStep_to") {
-      await (contract as any)[plan.fn].staticCall(address, value ? { value } : {});
+    // First try with value if we have one, else without, then flip
+    if (value !== undefined) {
+      try {
+        await tryStatic(true);
+      } catch {
+        await tryStatic(false);
+      }
     } else {
-      await (contract as any)[plan.fn].staticCall(value ? { value } : {});
+      try {
+        await tryStatic(false);
+      } catch {
+        await tryStatic(true);
+      }
     }
   } catch (e: any) {
-    // ethers v6 will often include a "reason" or "shortMessage"
-    const msg = e?.shortMessage || e?.data?.message || e?.message || String(e);
+    const msg = e?.shortMessage || e?.data?.message || e?.message || "unknown";
     throw new WalletError(`Mint would revert: ${msg}`);
   }
 
-  // Send tx(s)
-  if (plan.kind === "withURI_to") {
-    const tx = await (contract as any)[plan.fn](address, tokenURI, value ? { value } : {});
-    const receipt = await tx.wait();
-    const tokenId = extractTokenIdFromReceipt(contract, receipt, address);
-    return { txHash: receipt.hash, tokenId, minter: address };
-  }
-
-  if (plan.kind === "withURI_self") {
-    const tx = await (contract as any)[plan.fn](tokenURI, value ? { value } : {});
-    const receipt = await tx.wait();
-    const tokenId = extractTokenIdFromReceipt(contract, receipt, address);
-    return { txHash: receipt.hash, tokenId, minter: address };
-  }
-
-  // two-step: mint then setTokenURI
-  const tx1 = await (contract as any)[plan.fn](
-    plan.kind.endsWith("_to") ? address : (value ? { value } : {}),
-    plan.kind.endsWith("_to") ? (value ? { value } : {}) : undefined
-  );
-  const receipt1 = await tx1.wait();
-  const tokenId = extractTokenIdFromReceipt(contract, receipt1, address);
-
-  // If the function returned tokenId directly (some contracts do), prefer that
-  // but ethers v6 TransactionResponse doesn’t include returnData by default,
-  // so we rely on Transfer event above.
-
-  if (!tokenId) {
-    // still continue; user can set tokenURI later in admin if needed
-  } else {
-    // setTokenURI step (best effort)
-    try {
-      const set = contract.interface.getFunction("setTokenURI(uint256,string)");
-      if (set) {
-        // static check first
+  // Send the tx (mirror whatever staticCall that succeeded)
+  let tx: any;
+  const optsWith = value !== undefined ? { value } : {};
+  try {
+    switch (plan.type) {
+      case "withURI_to":
         try {
+          tx = await (contract as any)[plan.name](address, tokenURI, optsWith);
+        } catch {
+          tx = await (contract as any)[plan.name](address, tokenURI); // try w/o value
+        }
+        break;
+      case "withURI_self":
+        try {
+          tx = await (contract as any)[plan.name](tokenURI, optsWith);
+        } catch {
+          tx = await (contract as any)[plan.name](tokenURI);
+        }
+        break;
+      case "twoStep_to": {
+        try {
+          tx = await (contract as any)[plan.name](address, optsWith);
+        } catch {
+          tx = await (contract as any)[plan.name](address);
+        }
+        const receipt = await tx.wait();
+        const tokenId = tokenIdFromReceipt(contract, receipt, address);
+
+        // try setTokenURI best-effort
+        try {
+          contract.interface.getFunction("setTokenURI(uint256,string)");
           await (contract as any).setTokenURI.staticCall(tokenId, tokenURI);
           const tx2 = await (contract as any).setTokenURI(tokenId, tokenURI);
           await tx2.wait();
-        } catch (e: any) {
-          // do not hard-fail publish if setTokenURI reverts; surface info
-          console.warn("[setTokenURI] skipped:", e?.shortMessage || e?.message || e);
+        } catch {
+          // ignore; some contracts restrict this action
         }
+        return { txHash: receipt.hash, tokenId, minter: address };
       }
-    } catch {
-      // no setTokenURI function
+      case "twoStep_self": {
+        try {
+          tx = await (contract as any)[plan.name](optsWith);
+        } catch {
+          tx = await (contract as any)[plan.name]();
+        }
+        const receipt = await tx.wait();
+        const tokenId = tokenIdFromReceipt(contract, receipt, address);
+        try {
+          contract.interface.getFunction("setTokenURI(uint256,string)");
+          await (contract as any).setTokenURI.staticCall(tokenId, tokenURI);
+          const tx2 = await (contract as any).setTokenURI(tokenId, tokenURI);
+          await tx2.wait();
+        } catch {}
+        return { txHash: receipt.hash, tokenId, minter: address };
+      }
     }
+  } catch (e: any) {
+    const msg = e?.shortMessage || e?.data?.message || e?.message || String(e);
+    throw new WalletError(`Mint send failed: ${msg}`);
   }
 
-  return { txHash: receipt1.hash, tokenId, minter: address };
+  const receipt = await tx.wait();
+  const tokenId = tokenIdFromReceipt(contract, receipt, address);
+  return { txHash: receipt.hash, tokenId, minter: address };
 }
