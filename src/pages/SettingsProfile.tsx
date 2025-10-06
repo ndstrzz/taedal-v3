@@ -1,4 +1,3 @@
-// src/pages/SettingsProfile.tsx
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
@@ -14,13 +13,14 @@ export default function SettingsProfile() {
   const [displayName, setDisplayName] = useState('')
   const [username, setUsername] = useState('')
   const [bio, setBio] = useState('')
+
   const [avatarUrl, setAvatarUrl] = useState<string>('')
   const [coverUrl, setCoverUrl] = useState<string>('')
 
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
-  // crop modal
+  // crop modal state
   const [cropFor, setCropFor] = useState<'avatar' | 'cover' | null>(null)
   const [cropFile, setCropFile] = useState<File | null>(null)
 
@@ -44,9 +44,15 @@ export default function SettingsProfile() {
       if (!f || !user) return
       setCropFor(kind)
       setCropFile(f)
-      // reset input so re-selecting the same file fires change again
+      // allow re-selecting the same file
       e.currentTarget.value = ''
     }
+  }
+
+  // add a cache-buster so CDN shows the fresh file immediately
+  function bust(url: string) {
+    const sep = url.includes('?') ? '&' : '?'
+    return `${url}${sep}v=${Date.now()}`
   }
 
   async function handleCropped(blob: Blob) {
@@ -57,10 +63,11 @@ export default function SettingsProfile() {
         cropFor === 'avatar' ? 'avatars' : 'covers',
         user.id,
         blob,
-        'jpg',
+        'jpg'
       )
-      if (cropFor === 'avatar') setAvatarUrl(url)
-      else setCoverUrl(url)
+      const fresh = bust(url)
+      if (cropFor === 'avatar') setAvatarUrl(fresh)
+      else setCoverUrl(fresh)
     } catch (e: any) {
       setErr(e.message || 'Upload failed')
     } finally {
@@ -79,8 +86,8 @@ export default function SettingsProfile() {
         username: username.toLowerCase(),
         display_name: displayName || null,
         bio: bio || null,
-        avatar_url: avatarUrl || null,
-        cover_url: coverUrl || null,
+        avatar_url: avatarUrl ? bust(avatarUrl) : null,
+        cover_url: coverUrl ? bust(coverUrl) : null,
         updated_at: new Date().toISOString(),
       }).eq('id', user.id)
       if (error) throw error
@@ -102,7 +109,7 @@ export default function SettingsProfile() {
           <div className="h-24 w-24 overflow-hidden rounded-full ring-1 ring-border bg-elev1">
             <img src={avatarUrl || DEFAULT_AVATAR_URL} className="h-full w-full object-cover" />
           </div>
-          <label className="rounded-lg bg-elev1 px-3 py-1.5 text-sm ring-1 ring-border hover:bg-elev2 cursor-pointer">
+          <label className="cursor-pointer rounded-lg bg-elev1 px-3 py-1.5 text-sm ring-1 ring-border hover:bg-elev2">
             <input type="file" accept="image/*" className="hidden" onChange={beginCrop('avatar')} />
             Upload avatar
           </label>
@@ -113,7 +120,7 @@ export default function SettingsProfile() {
             <img src={coverUrl || DEFAULT_COVER_URL} className="h-full w-full object-cover" />
           </div>
           <div className="mt-2">
-            <label className="rounded-lg bg-elev1 px-3 py-1.5 text-sm ring-1 ring-border hover:bg-elev2 cursor-pointer">
+            <label className="cursor-pointer rounded-lg bg-elev1 px-3 py-1.5 text-sm ring-1 ring-border hover:bg-elev2">
               <input type="file" accept="image/*" className="hidden" onChange={beginCrop('cover')} />
               Upload cover
             </label>
@@ -122,38 +129,50 @@ export default function SettingsProfile() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <input className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:ring-brand"
-               placeholder="Display name"
-               value={displayName} onChange={e=>setDisplayName(e.target.value)} />
-        <input className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:ring-brand"
-               placeholder="username"
-               value={username} onChange={e=>setUsername(e.target.value.toLowerCase())} />
+        <input
+          className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:ring-brand"
+          placeholder="Display name"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+        />
+        <input
+          className="rounded-lg bg-elev1 p-3 ring-1 ring-border focus:ring-brand"
+          placeholder="username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value.toLowerCase())}
+        />
       </div>
 
-      <textarea className="mt-4 min-h-[96px] w-full rounded-lg bg-elev1 p-3 ring-1 ring-border focus:ring-brand"
-                placeholder="Short bio"
-                value={bio} onChange={e=>setBio(e.target.value.slice(0,160))} />
+      <textarea
+        className="mt-4 min-h-[96px] w-full rounded-lg bg-elev1 p-3 ring-1 ring-border focus:ring-brand"
+        placeholder="Short bio"
+        value={bio}
+        onChange={(e) => setBio(e.target.value.slice(0, 160))}
+      />
 
       {err && <div className="mt-3 text-sm text-error">{err}</div>}
 
       <div className="mt-6 flex items-center gap-3">
-        <button onClick={save} disabled={busy}
-          className="rounded-lg bg-brand/20 px-4 py-2 text-sm ring-1 ring-brand/50 hover:bg-brand/30">
+        <button
+          onClick={save}
+          disabled={busy}
+          className="rounded-lg bg-brand/20 px-4 py-2 text-sm ring-1 ring-brand/50 hover:bg-brand/30"
+        >
           {busy ? 'Saving…' : 'Save changes'}
         </button>
-        <button onClick={()=>nav(-1)} className="text-sm text-subtle hover:text-text">Cancel</button>
+        <button onClick={() => nav(-1)} className="text-sm text-subtle hover:text-text">
+          Cancel
+        </button>
       </div>
 
       {cropFor && cropFile && (
-  <CropModal
-    file={cropFile}
-    mode={cropFor}               // 'avatar' | 'cover'
-    onCancel={() => { setCropFor(null); setCropFile(null) }}
-    onConfirm={handleCropped}
-  />
-)}
-
-
+        <CropModal
+          file={cropFile}
+          mode={cropFor}
+          onCancel={() => { setCropFor(null); setCropFile(null) }}
+          onConfirm={handleCropped}
+        />
+      )}
     </div>
   )
 }
