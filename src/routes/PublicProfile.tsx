@@ -27,8 +27,8 @@ export default function PublicProfile() {
       setLoading(true)
       setErr(null)
       try {
-        if (!handle) { setP(null); setLoading(false); return }
-        const uname = handle.replace(/^@/,'')
+        if (!handle) { setP(null); return }
+        const uname = handle.replace(/^@/, '')   // accept /@andy or /andy
         const { data, error } = await supabase
           .from('profiles')
           .select('*')
@@ -49,6 +49,7 @@ export default function PublicProfile() {
     ? `${p.display_name} (@${p.username}) – Taedal`
     : handle ? `@${handle.replace(/^@/,'')} – Taedal` : 'Profile – Taedal'
 
+  // Loading / Error / Not found states
   if (loading) {
     return (
       <div className="mx-auto max-w-5xl p-6">
@@ -85,10 +86,12 @@ export default function PublicProfile() {
       <Helmet><title>{title}</title></Helmet>
 
       <div className="mx-auto max-w-5xl p-6">
+        {/* cover */}
         <div className="h-40 w-full overflow-hidden rounded-lg ring-1 ring-border bg-elev1">
           <img src={p.cover_url || DEFAULT_COVER_URL} className="h-full w-full object-cover" />
         </div>
 
+        {/* header */}
         <div className="mt-4 flex items-center gap-4">
           <div className="h-20 w-20 overflow-hidden rounded-full ring-1 ring-border bg-elev1">
             <img src={p.avatar_url || DEFAULT_AVATAR_URL} className="h-full w-full object-cover" />
@@ -109,6 +112,7 @@ export default function PublicProfile() {
 
         {p.bio && <p className="mt-4 max-w-2xl text-body">{p.bio}</p>}
 
+        {/* TODO: artworks grid */}
         <div className="mt-8 text-subtle">Artworks will appear here.</div>
       </div>
     </>

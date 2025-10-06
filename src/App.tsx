@@ -1,14 +1,26 @@
-// src/App.tsx
 import { Routes, Route } from 'react-router-dom'
 import NavBar from './components/NavBar'
-import Home from './pages/Home'                 // ✅ new landing page
-import Account from './pages/Account'           // was your old "home"
+
+// pages
+import Home from './pages/Account'
 import CreateArtwork from './pages/CreateArtwork'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
+import SettingsProfile from './pages/SettingsProfile'
+
+// public
 import PublicProfile from './routes/PublicProfile'
 import PublicArtwork from './routes/PublicArtwork'
-import SettingsProfile from './pages/SettingsProfile'
+
+// simple catch-all
+function NotFound() {
+  return (
+    <div className="mx-auto max-w-6xl px-4 py-10">
+      <div className="text-h2 mb-2">Not found</div>
+      <div className="text-subtle">That page doesn’t exist.</div>
+    </div>
+  )
+}
 
 export default function App() {
   return (
@@ -16,15 +28,24 @@ export default function App() {
       <NavBar />
       <main className="mx-auto max-w-6xl px-4">
         <Routes>
-          <Route path="/" element={<Home />} />                 {/* landing */}
-          <Route path="/account" element={<Account />} />       {/* account */}
-          <Route path="/create" element={<CreateArtwork />} />
+          {/* home */}
+          <Route path="/" element={<Home />} />
+
+          {/* auth */}
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
+
+          {/* settings + create */}
           <Route path="/settings" element={<SettingsProfile />} />
-          <Route path="/@:handle" element={<PublicProfile />} />{/* profile */}
-          <Route path="/portfolio" element={<PublicProfile />} />
+          <Route path="/create" element={<CreateArtwork />} />
+
+          {/* public routes */}
+          <Route path="/@:handle" element={<PublicProfile />} />
           <Route path="/community" element={<PublicArtwork />} />
+          <Route path="/portfolio" element={<PublicArtwork />} />
+
+          {/* catch-all (keep last) */}
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </main>
     </>
