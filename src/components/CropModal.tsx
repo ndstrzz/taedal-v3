@@ -1,112 +1,76 @@
-// src/components/CropModal.tsx
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactCrop, { type Crop, type PixelCrop } from 'react-image-crop'
 import 'react-image-crop/dist/ReactCrop.css'
 
 type Props = {
   file: File
-  /** "avatar" defaults to 1:1, "cover" defaults to 5:2 (wide). User can switch to freeform. */
+  /** 'avatar' uses 1:1, 'cover' uses 5:2 by default; user can also switch ratios or freeform. */
   mode: 'avatar' | 'cover'
-  /** Called when user cancels */
   onCancel: () => void
-  /** Called with the cropped image Blob (JPEG). */
   onConfirm: (blob: Blob) => void
-  /**
-   * Optional: max output width in px (height is derived by aspect when locked; otherwise based on crop box).
-   * Defaults: avatar 512, cover 1600.
-   */
+  /** clamp output width (height derived from crop). Defaults: avatar=512, cover=1600 */
   maxOutputWidth?: number
 }
 
 export default function CropModal({ file, mode, onCancel, onConfirm, maxOutputWidth }: Props) {
   const url = useMemo(() => URL.createObjectURL(file), [file])
   const imgRef = useRef<HTMLImageElement | null>(null)
-  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null)
-
-  // crop state
-  const [crop, setCrop] = useState<Crop>(() => ({
-    unit: '%',
-    x: 5,
-    y: 5,
-    width: mode === 'avatar' ? 90 : 90,
-    height: mode === 'avatar' ? 90 : 36, // approx 5:2
-  }))
   const [completed, setCompleted] = useState<PixelCrop | null>(null)
 
-  // aspect control: locked or freeform
-  const defaultAspect = mode === 'avatar' ? 1 / 1 : 5 / 2
+  const defaultAspect = mode === 'avatar' ? 1 : 5 / 2
   const [aspect, setAspect] = useState<number | undefined>(defaultAspect) // undefined = freeform
-
-  // zoom/rotate (optional; rotate omitted for simplicity)
-  const [zoom, setZoom] = useState(1) // scale applied at render/export time
-
   const maxW = maxOutputWidth ?? (mode === 'avatar' ? 512 : 1600)
+
+  const [crop, setCrop] = useState<Crop>(() => ({
+    unit: '%',
+    x: 5, y: 5,
+    width: 90,
+    height: mode === 'avatar' ? 90 : 36, // approx 5:2 visual start
+  }))
 
   useEffect(() => () => URL.revokeObjectURL(url), [url])
 
   function onImageLoaded(img: HTMLImageElement) {
     imgRef.current = img
-    setNatural({ w: img.naturalWidth, h: img.naturalHeight })
   }
 
   async function confirm() {
-    if (!imgRef.current || !completed || !natural) return
+    if (!imgRef.current || !completed) return
 
-    // Compute output size. For locked aspect, ensure width respects maxW.
-    // For freeform, scale crop box so the output width <= maxW.
-    const scaleX = imgRef.current.naturalWidth / imgRef.current.width
-    const scaleY = imgRef.current.naturalHeight / imgRef.current.height
+    // pixelCrop is relative to the displayed image size (no CSS scale here)
+    const img = imgRef.current
+    const scaleX = img.naturalWidth / img.width
+    const scaleY = img.naturalHeight / img.height
 
-    const cropW = Math.max(1, Math.round(completed.width * scaleX))
-    const cropH = Math.max(1, Math.round(completed.height * scaleY))
-
-    let outW = cropW
-    let outH = cropH
-
-    if (aspect) {
-      // lock height to the aspect
-      outW = Math.min(maxW, cropW)
-      outH = Math.round(outW / aspect)
-    } else {
-      // freeform: clamp width to max
-      if (outW > maxW) {
-        const s = maxW / outW
-        outW = Math.round(outW * s)
-        outH = Math.round(outH * s)
-      }
-    }
-
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.max(1, outW)
-    canvas.height = Math.max(1, outH)
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    // High quality
-    ctx.imageSmoothingQuality = 'high'
-
-    // Source rect (on the original image in natural pixels)
     const sx = Math.max(0, Math.floor(completed.x * scaleX))
     const sy = Math.max(0, Math.floor(completed.y * scaleY))
-    const sw = cropW
-    const sh = cropH
+    const sw = Math.max(1, Math.floor(completed.width * scaleX))
+    const sh = Math.max(1, Math.floor(completed.height * scaleY))
 
-    // Draw scaled into the output canvas (apply zoom)
-    // Zoom > 1 means we virtually crop a smaller area to scale up.
-    // To keep UX simple, we just scale destination draw.
-    const dx = 0
-    const dy = 0
-    const dw = Math.round(outW * zoom)
-    const dh = Math.round(outH * zoom)
+    // target output size (clamp to max width to keep files reasonable)
+    let outW = sw
+    let outH = sh
+    if (outW > maxW) {
+      const k = maxW / outW
+      outW = Math.round(outW * k)
+      outH = Math.round(outH * k)
+    }
 
-    // Center the zoomed draw in the canvas
-    const cx = Math.round((canvas.width - dw) / 2)
-    const cy = Math.round((canvas.height - dh) / 2)
+    // Retina-sharp canvas
+    const dpr = Math.min(2, window.devicePixelRatio || 1)
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(outW * dpr))
+    canvas.height = Math.max(1, Math.round(outH * dpr))
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.imageSmoothingQuality = 'high'
+    ctx.scale(dpr, dpr)
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    ctx.drawImage(imgRef.current, sx, sy, sw, sh, cx, cy, dw, dh)
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, outW, outH)
 
-    const blob: Blob = await new Promise((res) => canvas.toBlob(b => res(b!), 'image/jpeg', 0.92)!)
+    const blob: Blob = await new Promise((res) =>
+      canvas.toBlob((b) => res(b as Blob), 'image/jpeg', 0.92)
+    )
     onConfirm(blob)
   }
 
@@ -114,9 +78,7 @@ export default function CropModal({ file, mode, onCancel, onConfirm, maxOutputWi
     <div className="fixed inset-0 z-[999] grid place-items-center bg-black/60">
       <div className="w-[92vw] max-w-3xl rounded-xl bg-elev1 p-4 ring-1 ring-border">
         <div className="mb-3 flex items-center justify-between">
-          <div className="text-h3">
-            {mode === 'avatar' ? 'Edit avatar' : 'Edit cover'}
-          </div>
+          <div className="text-h3">{mode === 'avatar' ? 'Edit avatar' : 'Edit cover'}</div>
           <button onClick={onCancel} className="text-subtle hover:text-text text-sm">Cancel</button>
         </div>
 
@@ -136,7 +98,9 @@ export default function CropModal({ file, mode, onCancel, onConfirm, maxOutputWi
                 src={url}
                 onLoad={(e) => onImageLoaded(e.currentTarget)}
                 alt="to-crop"
-                style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
+                draggable={false}
+                className="select-none"
+                style={{ maxWidth: '100%', height: 'auto' }}
               />
             </ReactCrop>
           </div>
@@ -170,19 +134,6 @@ export default function CropModal({ file, mode, onCancel, onConfirm, maxOutputWi
                   16:9
                 </button>
               </div>
-            </div>
-
-            <div>
-              <div className="mb-1 text-sm text-subtle">Zoom</div>
-              <input
-                type="range"
-                min={1}
-                max={3}
-                step={0.01}
-                value={zoom}
-                onChange={(e) => setZoom(Number(e.target.value))}
-                className="w-full"
-              />
             </div>
 
             <div className="pt-2">

@@ -149,9 +149,10 @@ export default function SettingsProfile() {
     file={cropFile}
     mode={cropFor}               // 'avatar' | 'cover'
     onCancel={() => { setCropFor(null); setCropFile(null) }}
-    onConfirm={handleCropped}    // you already have this
+    onConfirm={handleCropped}
   />
 )}
+
 
     </div>
   )
