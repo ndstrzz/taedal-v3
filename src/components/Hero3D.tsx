@@ -18,19 +18,8 @@ function Blob() {
   )
 }
 
+// Temporary stub: remove three/r3f/drei at build time
 export default function Hero3D() {
-  return (
-    <div className="relative mx-auto w-full max-w-5xl overflow-hidden rounded-xl ring-1 ring-border">
-      <Canvas camera={{ position: [0, 0, 4], fov: 45 }}>
-        <color attach="background" args={['#0e0f12']} />
-        <ambientLight intensity={0.6} />
-        <directionalLight position={[2, 2, 2]} intensity={1.2} />
-        <directionalLight position={[-2, -1, -2]} intensity={0.4} />
-        <Suspense fallback={null}>
-          <Blob />
-        </Suspense>
-        <OrbitControls enablePan={false} enableZoom={false} />
-      </Canvas>
-    </div>
-  )
+  return null; // (or return a tiny SVG/placeholder if you want)
 }
+
