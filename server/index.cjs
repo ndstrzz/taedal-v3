@@ -21,9 +21,13 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || ''
 const sb = (SUPABASE_URL && SUPABASE_ANON_KEY) ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null
 
 app.use(cors({
-  origin: ['http://localhost:5173'],
+  origin: [
+    'http://localhost:5173',
+    'https://<your-vercel-project>.vercel.app', // add this now, update later if you add a custom domain
+  ],
   credentials: false,
 }))
+
 app.use(express.json())
 
 // Healthcheck
