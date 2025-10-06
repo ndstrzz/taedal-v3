@@ -1,3 +1,4 @@
+// src/lib/storage.ts
 import { supabase } from './supabase'
 
 export async function uploadPublicFile(
@@ -13,5 +14,22 @@ export async function uploadPublicFile(
   })
   if (error) throw error
   const { data } = supabase.storage.from(bucket).getPublicUrl(path)
-  return data.publicUrl // <-- string
+  return data.publicUrl
+}
+
+export async function uploadPublicBlob(
+  bucket: 'avatars' | 'covers',
+  userId: string,
+  blob: Blob,
+  ext = 'jpg'
+): Promise<string> {
+  const path = `${userId}/${Date.now()}.${ext}`
+  const { error } = await supabase.storage.from(bucket).upload(path, blob, {
+    cacheControl: '3600',
+    upsert: true,
+    contentType: `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+  })
+  if (error) throw error
+  const { data } = supabase.storage.from(bucket).getPublicUrl(path)
+  return data.publicUrl
 }

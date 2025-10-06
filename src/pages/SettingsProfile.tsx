@@ -1,9 +1,11 @@
+// src/pages/SettingsProfile.tsx
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { DEFAULT_AVATAR_URL, DEFAULT_COVER_URL } from '../lib/config'
-import { uploadPublicFile } from '../lib/storage'
+import { uploadPublicBlob } from '../lib/storage'
 import { useAuth } from '../state/AuthContext'
+import CropModal from '../components/CropModal'
 
 export default function SettingsProfile() {
   const { user } = useAuth()
@@ -12,11 +14,15 @@ export default function SettingsProfile() {
   const [displayName, setDisplayName] = useState('')
   const [username, setUsername] = useState('')
   const [bio, setBio] = useState('')
-  const [avatarUrl, setAvatarUrl] = useState<string>('') // string, not object
-  const [coverUrl, setCoverUrl] = useState<string>('')   // string, not object
+  const [avatarUrl, setAvatarUrl] = useState<string>('')
+  const [coverUrl, setCoverUrl] = useState<string>('')
 
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+
+  // crop modal
+  const [cropFor, setCropFor] = useState<'avatar' | 'cover' | null>(null)
+  const [cropFile, setCropFile] = useState<File | null>(null)
 
   useEffect(() => {
     if (!user) return
@@ -32,29 +38,35 @@ export default function SettingsProfile() {
     })()
   }, [user])
 
-  async function pickAvatar(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0]; if (!f || !user) return
-    setBusy(true); setErr('')
-    try {
-      const url = await uploadPublicFile('avatars', user.id, f) // returns string
-      setAvatarUrl(url)
-    } catch (e: any) {
-      setErr(e.message || 'Upload failed')
-    } finally {
-      setBusy(false)
+  function beginCrop(kind: 'avatar' | 'cover') {
+    return (e: React.ChangeEvent<HTMLInputElement>) => {
+      const f = e.target.files?.[0]
+      if (!f || !user) return
+      setCropFor(kind)
+      setCropFile(f)
+      // reset input so re-selecting the same file fires change again
+      e.currentTarget.value = ''
     }
   }
 
-  async function pickCover(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0]; if (!f || !user) return
+  async function handleCropped(blob: Blob) {
+    if (!user || !cropFor) return
     setBusy(true); setErr('')
     try {
-      const url = await uploadPublicFile('covers', user.id, f) // returns string
-      setCoverUrl(url)
+      const url = await uploadPublicBlob(
+        cropFor === 'avatar' ? 'avatars' : 'covers',
+        user.id,
+        blob,
+        'jpg',
+      )
+      if (cropFor === 'avatar') setAvatarUrl(url)
+      else setCoverUrl(url)
     } catch (e: any) {
       setErr(e.message || 'Upload failed')
     } finally {
       setBusy(false)
+      setCropFor(null)
+      setCropFile(null)
     }
   }
 
@@ -87,22 +99,22 @@ export default function SettingsProfile() {
 
       <div className="mb-6 grid grid-cols-1 gap-6 md:grid-cols-3">
         <div className="flex flex-col items-center gap-3">
-          <div className="h-24 w-24 overflow-hidden rounded-full ring-1 ring-border">
+          <div className="h-24 w-24 overflow-hidden rounded-full ring-1 ring-border bg-elev1">
             <img src={avatarUrl || DEFAULT_AVATAR_URL} className="h-full w-full object-cover" />
           </div>
           <label className="rounded-lg bg-elev1 px-3 py-1.5 text-sm ring-1 ring-border hover:bg-elev2 cursor-pointer">
-            <input type="file" accept="image/*" className="hidden" onChange={pickAvatar} />
+            <input type="file" accept="image/*" className="hidden" onChange={beginCrop('avatar')} />
             Upload avatar
           </label>
         </div>
 
         <div className="md:col-span-2">
-          <div className="h-32 w-full overflow-hidden rounded-lg ring-1 ring-border">
+          <div className="h-32 w-full overflow-hidden rounded-lg ring-1 ring-border bg-elev1">
             <img src={coverUrl || DEFAULT_COVER_URL} className="h-full w-full object-cover" />
           </div>
           <div className="mt-2">
             <label className="rounded-lg bg-elev1 px-3 py-1.5 text-sm ring-1 ring-border hover:bg-elev2 cursor-pointer">
-              <input type="file" accept="image/*" className="hidden" onChange={pickCover} />
+              <input type="file" accept="image/*" className="hidden" onChange={beginCrop('cover')} />
               Upload cover
             </label>
           </div>
@@ -131,6 +143,18 @@ export default function SettingsProfile() {
         </button>
         <button onClick={()=>nav(-1)} className="text-sm text-subtle hover:text-text">Cancel</button>
       </div>
+
+      {/* Crop modals */}
+      {cropFor && cropFile && (
+        <CropModal
+          file={cropFile}
+          aspect={cropFor === 'avatar' ? 1 : 2.5}   // avatar 1:1, cover 5:2 ~ 2.5
+          maxOutput={cropFor === 'avatar' ? 512 : 1600}
+          title={cropFor === 'avatar' ? 'Crop avatar' : 'Crop cover'}
+          onCancel={() => { setCropFor(null); setCropFile(null) }}
+          onConfirm={handleCropped}
+        />
+      )}
     </div>
   )
 }

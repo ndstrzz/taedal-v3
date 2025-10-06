@@ -1,4 +1,5 @@
-import { useParams } from 'react-router-dom'
+// src/routes/PublicProfile.tsx
+import { useParams, Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { Helmet } from 'react-helmet-async'
@@ -14,7 +15,7 @@ type Profile = {
 }
 
 export default function PublicProfile() {
-  const { handle } = useParams<{ handle: string }>()
+  const { handle } = useParams() // /@:handle
   const [p, setP] = useState<Profile | null>(null)
 
   useEffect(() => {
@@ -32,9 +33,7 @@ export default function PublicProfile() {
 
   const title = p?.display_name
     ? `${p.display_name} (@${p.username}) – Taedal`
-    : handle
-    ? `@${handle.replace(/^@/,'')} – Taedal`
-    : 'Profile – Taedal'
+    : handle ? `@${handle.replace(/^@/,'')} – Taedal` : 'Profile – Taedal'
 
   return (
     <>
@@ -56,12 +55,15 @@ export default function PublicProfile() {
             />
           </div>
           <div>
-            <div className="text-h2">{p?.display_name || 'Untitled'}</div>
-            <div className="text-subtle">@{p?.username || handle?.replace(/^@/,'')}</div>
+            <div className="text-h2">{p?.display_name || p?.username || 'Untitled'}</div>
+            {p?.username && <div className="text-subtle">@{p.username}</div>}
           </div>
+          {/* Optional: link to edit if this is the owner — left out to avoid extra auth wiring here */}
         </div>
 
         {p?.bio && <p className="mt-4 max-w-2xl text-body">{p.bio}</p>}
+
+        {/* TODO: list artworks minted by this user */}
       </div>
     </>
   )
