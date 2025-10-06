@@ -7,6 +7,8 @@ import { pinFileViaServerWithProgress } from "../lib/ipfs";
 import { useToast } from "../components/Toaster";
 import { Skeleton } from "../components/Skeleton";
 import DropZone from "../components/DropZone";
+import MintWalletModal from "../components/MintWalletModal";
+import { mintWithMetaMask, WalletError } from "../lib/eth";
 
 type SimilarRecord = {
   id: string;
@@ -29,7 +31,7 @@ export default function CreateArtwork() {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const fileInputRef = useRef<HTMLInputElement | null>(null); // kept for potential future needs
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string>("");
@@ -42,6 +44,15 @@ export default function CreateArtwork() {
 
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<number>(0);
+
+  // mint modal state
+  const [mintOpen, setMintOpen] = useState(false);
+  const [mintBusy, setMintBusy] = useState(false);
+  const [mintErr, setMintErr] = useState<string | null>(null);
+
+  // temp values carried into mint step
+  const [pendingMetaUrl, setPendingMetaUrl] = useState<string>(""); // ipfs://...
+  const [pendingImageCid, setPendingImageCid] = useState<string>("");
 
   // skeleton for first mount
   const [initializing, setInitializing] = useState(true);
@@ -74,7 +85,7 @@ export default function CreateArtwork() {
     [file, title, busy, checking, mustAcknowledge, ackOriginal]
   );
 
-  // ——— file intake (validates browse + drag-drop the same way) ———
+  // ——— file intake & validation ———
   const handleNewFile = useCallback(
     (f: File) => {
       if (!ACCEPT.split(",").includes(f.type)) {
@@ -94,7 +105,7 @@ export default function CreateArtwork() {
         return;
       }
       setFile(f);
-      setCandidates(null);     // reset similarity state
+      setCandidates(null);
       setAckOriginal(false);
     },
     [toast]
@@ -148,13 +159,14 @@ export default function CreateArtwork() {
           title: "Similarity check error",
           description: String(err.message || err),
         });
-        setCandidates([]); // don’t block user if the check failed
+        setCandidates([]); // let user proceed even if check failed
       } finally {
         setChecking(false);
       }
     })();
   }, [file, toast]);
 
+  // Create → upload + metadata, then open wallet modal for mint
   const onSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
@@ -221,32 +233,13 @@ export default function CreateArtwork() {
         const { metadata_cid, metadata_url } = await r2.json();
         toast({ variant: "success", title: "Pinned metadata" });
 
-        // 4) Insert DB row
-        const { data: inserted, error: dberr } = await supabase
-          .from("artworks")
-          .insert({
-            owner: user.id,
-            title: title.trim(),
-            description: description.trim(),
-            cover_url: DEFAULT_COVER_URL,
-            status: "published",
-            image_cid: pin.cid,
-            metadata_url: metadata_url ?? `ipfs://${metadata_cid}`,
-            dhash64,
-            sha256,
-          })
-          .select("*")
-          .single();
+        // 4) Open mint modal with the tokenURI
+        setPendingMetaUrl(metadata_url ?? `ipfs://${metadata_cid}`);
+        setPendingImageCid(pin.cid);
+        setMintErr(null);
+        setMintOpen(true);
 
-        if (dberr) throw dberr;
-
-        toast({
-          variant: "success",
-          title: "Artwork saved",
-          description: "Redirecting to your artwork…",
-        });
-
-        navigate(`/a/${inserted.id}`, { replace: true });
+        // keep busy spinner while modal is open
       } catch (err: any) {
         toast({
           variant: "error",
@@ -257,8 +250,51 @@ export default function CreateArtwork() {
         setProgress(0);
       }
     },
-    [user, file, title, description, navigate, toast]
+    [user, file, title, description, toast]
   );
+
+  // When MetaMask is picked inside modal
+  async function handleMintWithMetaMask() {
+    try {
+      setMintBusy(true);
+      setMintErr(null);
+      const { txHash, tokenId, minter } = await mintWithMetaMask(pendingMetaUrl);
+
+      toast({
+        variant: "success",
+        title: "Minted on-chain",
+        description: `tx: ${txHash.slice(0, 10)}…`,
+      });
+
+      // Insert DB row *after* successful mint
+      const { data: inserted, error: dberr } = await supabase
+        .from("artworks")
+        .insert({
+          owner: user!.id,
+          title: title.trim(),
+          description: description.trim(),
+          cover_url: DEFAULT_COVER_URL,
+          status: "published",
+          image_cid: pendingImageCid,
+          metadata_url: pendingMetaUrl,
+          token_id: tokenId,
+          tx_hash: txHash,
+        })
+        .select("*")
+        .single();
+
+      if (dberr) throw dberr;
+
+      setMintOpen(false);
+      setBusy(false);
+      navigate(`/a/${inserted.id}`, { replace: true });
+    } catch (e: any) {
+      const msg = e instanceof WalletError ? e.message : (e?.message || String(e));
+      setMintErr(msg);
+    } finally {
+      setMintBusy(false);
+    }
+  }
 
   // --- UI ---
 
@@ -283,7 +319,7 @@ export default function CreateArtwork() {
       <h1 className="mb-6 text-2xl font-semibold">Create artwork</h1>
 
       <form onSubmit={onSubmit} className="grid grid-cols-1 gap-6 md:grid-cols-2">
-        {/* Left: media with DropZone */}
+        {/* Left: media */}
         <div>
           <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-900">
             {previewUrl ? (
@@ -305,7 +341,6 @@ export default function CreateArtwork() {
             )}
           </div>
 
-          {/* Keep a regular input as a secondary path for browsers/extensions */}
           <div className="mt-4 flex items-center gap-3">
             <input
               ref={fileInputRef}
@@ -362,7 +397,7 @@ export default function CreateArtwork() {
           )}
 
           {/* originality confirmation appears only when matches are found */}
-          {mustAcknowledge && (
+          {(candidates?.length ?? 0) > 0 && (
             <label className="flex items-start gap-3 rounded-2xl border border-yellow-600/40 bg-yellow-500/10 p-3 text-sm text-yellow-100">
               <input
                 type="checkbox"
@@ -381,7 +416,7 @@ export default function CreateArtwork() {
               className="rounded-xl bg-white px-4 py-2 font-medium text-black disabled:opacity-60"
               disabled={!canSubmit}
             >
-              {busy ? "Creating…" : "Create & publish"}
+              {busy ? "Preparing…" : "Create & publish"}
             </button>
           </div>
         </div>
@@ -419,6 +454,19 @@ export default function CreateArtwork() {
           )}
         </div>
       )}
+
+      {/* Mint wallet modal */}
+      <MintWalletModal
+        open={mintOpen}
+        busy={mintBusy}
+        error={mintErr || null}
+        onClose={() => {
+          // allow closing; user can try again by clicking Create again or we could add a "Mint now" button
+          setMintOpen(false);
+          setBusy(false);
+        }}
+        onPickMetaMask={handleMintWithMetaMask}
+      />
     </div>
   );
 }

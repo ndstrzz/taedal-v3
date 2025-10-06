@@ -1,159 +1,155 @@
-// src/lib/eth.ts — ethers v6 compatible, prefers window.__CONFIG__
-import { ethers } from 'ethers'
+import {
+  BrowserProvider,
+  Contract,
+  JsonRpcSigner,
+  parseUnits,
+  isHexString,
+} from "ethers";
+import { CHAIN_ID, NFT_ADDRESS } from "./config";
 
-// Resolve runtime / env
-const WIN  = (typeof window !== 'undefined' ? (window as any).__CONFIG__ : undefined) || {}
-const VITE = typeof import.meta !== 'undefined' ? (import.meta as any).env || {} : {}
-const CRA  = typeof process !== 'undefined' ? (process as any).env || {} : {}
-const LS   = typeof localStorage !== 'undefined' ? localStorage : { getItem: () => '' }
+// --- Minimal ABIs for common mint functions ---
+// Adjust/add signatures here to match your contract
+const CANDIDATE_ABIS = [
+  // 1) safeMint(to, tokenURI)
+  [
+    "function safeMint(address to, string uri) public returns (uint256)",
+    "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
+  ],
+  // 2) mint(to, tokenURI)
+  [
+    "function mint(address to, string uri) public returns (uint256)",
+    "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
+  ],
+  // 3) mint(tokenURI) — mints to msg.sender
+  [
+    "function mint(string uri) public returns (uint256)",
+    "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
+  ],
+  // 4) safeMint(tokenURI) — mints to msg.sender
+  [
+    "function safeMint(string uri) public returns (uint256)",
+    "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
+  ],
+];
 
-export const NFT_ADDRESS: string =
-  (WIN.NFT_ADDRESS as string) ||
-  (CRA?.REACT_APP_NFT_ADDRESS as string) ||
-  (VITE?.VITE_NFT_ADDRESS as string) ||
-  (LS.getItem('NFT_ADDRESS') as string) ||
-  ''
-
-export const CHAIN_ID: number = Number(
-  WIN.CHAIN_ID ?? CRA?.REACT_APP_CHAIN_ID ?? VITE?.VITE_CHAIN_ID ?? 11155111
-)
-
-const CHAIN: Record<number, any> = {
-  11155111: {
-    chainIdHex: '0xaa36a7',
-    chainName: 'Sepolia',
-    rpcUrls: ['https://rpc.sepolia.org'],
-    blockExplorerTx: 'https://sepolia.etherscan.io/tx/',
-    blockExplorerToken: 'https://sepolia.etherscan.io/token/',
-    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-  },
-}
-
-const ABI = [
-  {
-    anonymous: false,
-    inputs: [
-      { indexed: true,  internalType: 'address', name: 'minter',    type: 'address' },
-      { indexed: true,  internalType: 'uint256', name: 'artworkId', type: 'uint256' },
-      { indexed: true,  internalType: 'uint256', name: 'tokenId',   type: 'uint256' },
-      { indexed: false, internalType: 'string',  name: 'tokenURI',  type: 'string'  },
-    ],
-    name: 'ArtworkLinked',
-    type: 'event',
-  },
-  {
-    inputs: [
-      { internalType: 'string',  name: 'uri',       type: 'string'  },
-      { internalType: 'uint256', name: 'artworkId', type: 'uint256' },
-    ],
-    name: 'mintWithURI',
-    outputs: [{ internalType: 'uint256', name: 'tokenId', type: 'uint256' }],
-    stateMutability: 'nonpayable',
-    type: 'function',
-  },
-]
-
-export function txUrl(hash: string) {
-  const base = CHAIN[CHAIN_ID]?.blockExplorerTx || 'https://sepolia.etherscan.io/tx/'
-  return `${base}${hash}`
-}
-export function tokenUrl(tokenId?: string | number | null) {
-  if (tokenId == null) return null
-  const base = CHAIN[CHAIN_ID]?.blockExplorerToken || 'https://sepolia.etherscan.io/token/'
-  return `${base}${NFT_ADDRESS}?a=${tokenId}`
-}
-
-function getInjected() {
-  const eth = (window as any).ethereum
-  if (!eth) return undefined
-  if (Array.isArray(eth.providers)) {
-    const mm = eth.providers.find((p: any) => p.isMetaMask)
-    return mm || eth.providers[0]
-  }
-  return eth
-}
-
-async function ensureChainWithInjected(injected: any) {
-  const cfg = CHAIN[CHAIN_ID]
-  if (!cfg) return
-  const current: string = await injected.request({ method: 'eth_chainId' })
-  if (current?.toLowerCase() === cfg.chainIdHex) return
-  try {
-    await injected.request({
-      method: 'wallet_switchEthereumChain',
-      params: [{ chainId: cfg.chainIdHex }],
-    })
-  } catch (e: any) {
-    if (e?.code === 4902) {
-      await injected.request({
-        method: 'wallet_addEthereumChain',
-        params: [cfg],
-      })
-    } else {
-      throw e
-    }
+export class WalletError extends Error {
+  code?: string | number;
+  constructor(message: string, code?: string | number) {
+    super(message);
+    this.code = code;
   }
 }
 
-/** Mint and return { hash, etherscan, tokenId } — ethers v6 */
-export async function mintOnChain(tokenURI: string, artworkId = 0) {
-  if (!NFT_ADDRESS) throw new Error('NFT contract address not set')
+declare global {
+  interface Window {
+    ethereum?: any;
+  }
+}
 
-  const injected = getInjected()
-  if (!injected) throw new Error('No Ethereum wallet found (install MetaMask)')
+export async function getMetaMaskProvider(): Promise<BrowserProvider> {
+  if (!window.ethereum) {
+    throw new WalletError("MetaMask not detected");
+  }
+  const provider = new BrowserProvider(window.ethereum);
+  return provider;
+}
 
-  await injected.request({ method: 'eth_requestAccounts' })
-  await ensureChainWithInjected(injected)
+export async function ensureConnectedOnChain(provider: BrowserProvider): Promise<{
+  signer: JsonRpcSigner;
+  address: string;
+}> {
+  await provider.send("eth_requestAccounts", []);
+  const signer = await provider.getSigner();
+  const address = await signer.getAddress();
 
-  const provider = new ethers.BrowserProvider(injected)
-  const signer = await provider.getSigner()
-  const contract = new ethers.Contract(NFT_ADDRESS, ABI, signer)
-
-  let predicted: string | null = null
-  try {
-    const p = await (contract as any).mintWithURI.staticCall(tokenURI, artworkId)
-    predicted = p?.toString?.() || null
-  } catch {}
-
-  const tx = await (contract as any).mintWithURI(tokenURI, artworkId)
-  const receipt = await tx.wait()
-
-  let tokenId: string | null = null
-  try {
-    for (const log of receipt?.logs || []) {
-      try {
-        const parsed = (contract as any).interface.parseLog(log)
-        if (parsed?.name === 'ArtworkLinked') {
-          tokenId = parsed.args.tokenId.toString()
-          break
-        }
-      } catch {}
+  const net = await provider.getNetwork();
+  if (Number(net.chainId) !== Number(CHAIN_ID)) {
+    try {
+      await provider.send("wallet_switchEthereumChain", [
+        { chainId: "0x" + Number(CHAIN_ID).toString(16) },
+      ]);
+    } catch (e: any) {
+      // chain not added → optional: addChain code goes here
+      throw new WalletError(
+        `Wrong network. Please switch to chain ${CHAIN_ID}.`,
+        e?.code
+      );
     }
-    if (!tokenId && receipt?.logs) {
-      const zero = ethers.ZeroAddress
-      for (const log of receipt.logs) {
+  }
+
+  return { signer, address };
+}
+
+function pickContract(address: string, signer: JsonRpcSigner): {
+  contract: Contract;
+  fn: "safeMint_addr" | "mint_addr" | "mint" | "safeMint";
+} {
+  for (const abi of CANDIDATE_ABIS) {
+    const c = new Contract(address, abi, signer);
+    // probe function existence
+    const fns = Object.keys(c.interface.functions);
+    if (fns.some((f) => f.startsWith("safeMint(address,string)"))) {
+      return { contract: c, fn: "safeMint_addr" };
+    }
+    if (fns.some((f) => f.startsWith("mint(address,string)"))) {
+      return { contract: c, fn: "mint_addr" };
+    }
+    if (fns.some((f) => f.startsWith("mint(string)"))) {
+      return { contract: c, fn: "mint" };
+    }
+    if (fns.some((f) => f.startsWith("safeMint(string)"))) {
+      return { contract: c, fn: "safeMint" };
+    }
+  }
+  throw new WalletError("Mint function not found in ABI — update eth.ts ABI list to match your contract.");
+}
+
+export async function mintWithMetaMask(
+  tokenURI: string
+): Promise<{ txHash: string; tokenId: string | null; minter: string }> {
+  if (!NFT_ADDRESS) throw new WalletError("NFT contract address missing");
+  if (!tokenURI) throw new WalletError("Missing tokenURI");
+
+  const provider = await getMetaMaskProvider();
+  const { signer, address } = await ensureConnectedOnChain(provider);
+
+  const { contract, fn } = pickContract(NFT_ADDRESS, signer);
+
+  let tx;
+  if (fn === "safeMint_addr" || fn === "mint_addr") {
+    tx = await (contract as any)[fn === "safeMint_addr" ? "safeMint" : "mint"](
+      address,
+      tokenURI
+    );
+  } else {
+    tx = await (contract as any)[fn](tokenURI);
+  }
+
+  const receipt = await tx.wait();
+  // try to find Transfer(to=address) and pick tokenId
+  let tokenId: string | null = null;
+  try {
+    const transferLogs = receipt.logs
+      .map((l: any) => {
         try {
-          const parsed = (contract as any).interface.parseLog(log)
-          if (parsed?.name === 'Transfer' && String(parsed.args?.from).toLowerCase() === zero) {
-            tokenId = parsed.args.tokenId.toString()
-            break
-          }
-        } catch {}
-      }
+          return contract.interface.parseLog(l);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .filter((ev: any) => ev?.name === "Transfer");
+
+    const selfTransfer = transferLogs.find(
+      (ev: any) => ev?.args?.to?.toLowerCase?.() === address.toLowerCase()
+    );
+    if (selfTransfer) {
+      const id = selfTransfer.args?.tokenId?.toString?.();
+      tokenId = id || null;
     }
-  } catch {}
+  } catch {
+    tokenId = null;
+  }
 
-  if (!tokenId && predicted) tokenId = predicted
-
-  try {
-    if (tokenId != null) localStorage.setItem('lastTokenId', String(tokenId))
-    if ((receipt as any)?.hash) localStorage.setItem('lastTxHash', (receipt as any).hash)
-    if (NFT_ADDRESS) localStorage.setItem('lastContract', NFT_ADDRESS)
-  } catch {}
-
-  return { hash: (receipt as any).hash, etherscan: txUrl((receipt as any).hash), tokenId }
-}
-
-if (!NFT_ADDRESS) {
-  console.warn('[eth] NFT_ADDRESS empty — set it in window.__CONFIG__, VITE_NFT_ADDRESS, or localStorage.NFT_ADDRESS')
+  return { txHash: receipt.hash, tokenId, minter: address };
 }
