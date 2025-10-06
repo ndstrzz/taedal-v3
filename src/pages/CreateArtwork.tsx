@@ -6,9 +6,6 @@ import { DEFAULT_COVER_URL, API_BASE } from '../lib/config'
 import { pinFileViaServerWithProgress } from '../lib/ipfs'
 import { mintOnChain, txUrl, tokenUrl } from '../lib/eth'
 
-const ACCEPT = 'image/png,image/jpeg,image/webp,video/mp4'
-const MAX_MB = 25
-
 type SimilarRecord = {
   id: string | number
   title: string
@@ -17,6 +14,9 @@ type SimilarRecord = {
   image_url: string
   score?: number
 }
+
+const ACCEPT = 'image/png,image/jpeg,image/webp,video/mp4'
+const MAX_MB = 25
 
 export default function CreateArtwork() {
   const { user } = useAuth()
@@ -45,15 +45,14 @@ export default function CreateArtwork() {
 
   // Similarity + rights gate
   const [similar, setSimilar] = useState<SimilarRecord[]>([])
-  const [reviewChecked, setReviewChecked] = useState(true) // auto true if no matches
+  const [similarBusy, setSimilarBusy] = useState(false)
+  const [similarErr, setSimilarErr] = useState<string | null>(null)
+  const [reviewChecked, setReviewChecked] = useState(true)
   const [consent, setConsent] = useState(false)
 
   // Hashes we’ll persist in DB
   const [dhash, setDhash] = useState<string | null>(null)
   const [sha256, setSha256] = useState<string | null>(null)
-
-  /** 👇 no-op read so TS doesn't flag these as "declared but never read" */
-  ;[ipfsCid, metadataCid, dhash, sha256].forEach(() => {})
 
   function onPick(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0] || null
@@ -76,18 +75,23 @@ export default function CreateArtwork() {
   }
 
   async function runSimilarCheck(f: File) {
+    setSimilarBusy(true)
+    setSimilarErr(null)
     try {
       const fd = new FormData()
       fd.append('artwork', f)
       const res = await fetch(`${API_BASE}/api/verify`, { method: 'POST', body: fd })
-      if (!res.ok) throw new Error('Similarity check failed')
+      if (!res.ok) throw new Error(`Similarity check failed (${res.status})`)
       const data = await res.json()
       const matches: SimilarRecord[] = Array.isArray(data?.similar) ? data.similar : []
       setSimilar(matches)
       setReviewChecked(matches.length === 0)
-    } catch {
+    } catch (e: any) {
+      setSimilarErr(e?.message || 'Similarity service unavailable')
       setSimilar([])
       setReviewChecked(true)
+    } finally {
+      setSimilarBusy(false)
     }
   }
 
@@ -104,7 +108,23 @@ export default function CreateArtwork() {
 
   async function publish() {
     setErr('')
-    if (!user) return nav('/login')
+
+    // Refresh session before deciding to bounce
+    let uid = user?.id || null
+    if (!uid) {
+      try {
+        const { data } = await supabase.auth.getUser()
+        uid = data.user?.id ?? null
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!uid) {
+      setErr('Your session expired. Please log in again.')
+      nav('/login', { replace: true })
+      return
+    }
+
     if (!title.trim()) return setErr('Title is required.')
     if (!file) return setErr('Please choose an image or video.')
     if (file.size > MAX_MB * 1024 * 1024) return setErr(`Max file size is ${MAX_MB}MB.`)
@@ -120,7 +140,7 @@ export default function CreateArtwork() {
       const pin = await pinFileViaServerWithProgress(file, title.trim(), (p) => setPct(p))
       setIpfsCid(pin.cid)
 
-      // 2) Compute hashes for DB
+      // 2) Compute hashes (for DB)
       const hashes = await computeHashes(file)
 
       // 3) Pin metadata
@@ -142,7 +162,7 @@ export default function CreateArtwork() {
       const { data: a, error } = await supabase
         .from('artworks')
         .insert({
-          owner: user.id,
+          owner: uid,
           title: title.trim(),
           description: description.trim() || null,
           cover_url: pin.gatewayUrl || DEFAULT_COVER_URL,
@@ -175,7 +195,7 @@ export default function CreateArtwork() {
       // 7) Go to detail
       nav(`/a/${artworkId}`, { replace: true })
     } catch (e: any) {
-      setErr(e.message || 'Publish failed')
+      setErr(e?.message || 'Publish failed')
       setPhase('idle')
     } finally {
       setBusy(false)
@@ -185,7 +205,9 @@ export default function CreateArtwork() {
   return (
     <div className="mx-auto max-w-3xl p-6">
       <h1 className="mb-2 text-h1">Create artwork</h1>
-      <p className="mb-6 text-subtle">Upload a cover image or short video, add a title and description.</p>
+      <p className="mb-6 text-subtle">
+        Upload a cover image or short video, add a title and description.
+      </p>
 
       <div className="mb-6 grid grid-cols-1 gap-6 md:grid-cols-2">
         {/* Media picker */}
@@ -241,7 +263,11 @@ export default function CreateArtwork() {
 
           <div className="rounded-lg bg-elev1 p-3 ring-1 ring-border">
             <div className="font-medium mb-2">Similarity check</div>
-            {similar.length === 0 ? (
+            {similarBusy ? (
+              <div className="text-sm text-subtle">Checking…</div>
+            ) : similarErr ? (
+              <div className="text-sm text-error">{similarErr}</div>
+            ) : similar.length === 0 ? (
               <div className="text-sm text-subtle">No matches found.</div>
             ) : (
               <>

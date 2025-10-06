@@ -11,29 +11,58 @@ const { createClient } = require('@supabase/supabase-js')
 const { dhash64, sha256Hex, hammingHex } = require('./utils/similarity.cjs')
 
 const app = express()
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } }) // 50MB
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+})
 
-const PORT = process.env.PORT || 5000
+// ---- Config ---------------------------------------------------------------
+
+const PORT = Number(process.env.PORT || 5000)
 const PINATA_JWT = process.env.PINATA_JWT || ''
 const SUPABASE_URL = process.env.SUPABASE_URL || ''
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || ''
 
-const sb = (SUPABASE_URL && SUPABASE_ANON_KEY) ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null
+const sb =
+  SUPABASE_URL && SUPABASE_ANON_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    : null
 
-app.use(cors({
-  origin: [
-    'http://localhost:5173',
-    'https://<your-vercel-project>.vercel.app', // add this now, update later if you add a custom domain
-  ],
-  credentials: false,
-}))
+// ---- CORS (allow localhost & *.vercel.app) --------------------------------
+
+const allowlist = [
+  'http://localhost:5173',
+  /\.vercel\.app$/i,
+]
+
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (!origin) return cb(null, true) // SSR/cURL/no-origin
+      const ok = allowlist.some((rule) =>
+        typeof rule === 'string' ? rule === origin : rule.test(origin)
+      )
+      if (ok) return cb(null, true)
+      console.warn('[CORS] blocked origin:', origin)
+      return cb(null, false)
+    },
+    credentials: false,
+  })
+)
+
+// Minimal request logging (helps when debugging CORS / network)
+app.use((req, _res, next) => {
+  console.log('[api]', req.method, req.path, 'from', req.headers.origin || 'no-origin')
+  next()
+})
 
 app.use(express.json())
 
-// Healthcheck
-app.get('/api/health', (_, res) => res.json({ ok: true }))
+// ---- Healthcheck ----------------------------------------------------------
 
-// ---------------- IPFS / Pinata ----------------
+app.get('/api/health', (_req, res) => res.json({ ok: true }))
+
+// ---- IPFS / Pinata --------------------------------------------------------
 
 // Pin a file to IPFS via Pinata
 app.post('/api/pinata/pin-file', upload.single('file'), async (req, res) => {
@@ -42,20 +71,30 @@ app.post('/api/pinata/pin-file', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
 
     const form = new FormData()
-    form.append('file', req.file.buffer, { filename: req.file.originalname, contentType: req.file.mimetype })
+    form.append('file', req.file.buffer, {
+      filename: req.file.originalname,
+      contentType: req.file.mimetype,
+    })
 
-    const name = (req.body.name || req.file.originalname || 'upload').slice(0, 80)
+    const name = (req.body?.name || req.file.originalname || 'upload').slice(0, 80)
     form.append('pinataMetadata', JSON.stringify({ name }))
     form.append('pinataOptions', JSON.stringify({ cidVersion: 1 }))
 
     const { data } = await axios.post(
       'https://api.pinata.cloud/pinning/pinFileToIPFS',
       form,
-      { headers: { Authorization: `Bearer ${PINATA_JWT}`, ...form.getHeaders() }, maxBodyLength: Infinity }
+      {
+        headers: { Authorization: `Bearer ${PINATA_JWT}`, ...form.getHeaders() },
+        maxBodyLength: Infinity,
+      }
     )
 
     const cid = data.IpfsHash
-    res.json({ cid, ipfsUri: `ipfs://${cid}`, gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}` })
+    res.json({
+      cid,
+      ipfsUri: `ipfs://${cid}`,
+      gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}`,
+    })
   } catch (err) {
     console.error('[pin-file] error', err?.response?.data || err.message)
     res.status(500).json({ error: 'Pinning failed', details: err?.response?.data || err.message })
@@ -66,29 +105,35 @@ app.post('/api/pinata/pin-file', upload.single('file'), async (req, res) => {
 app.post('/api/metadata', async (req, res) => {
   try {
     if (!PINATA_JWT) return res.status(500).json({ error: 'Server misconfigured: PINATA_JWT missing' })
+
     const payload = req.body || {}
-    // Ensure shape: { name, description, imageCid }
     const meta = {
       name: String(payload.name || 'Untitled'),
       description: String(payload.description || ''),
       image: payload.imageCid ? `ipfs://${payload.imageCid}` : undefined,
     }
+
     const { data } = await axios.post(
       'https://api.pinata.cloud/pinning/pinJSONToIPFS',
       meta,
       { headers: { Authorization: `Bearer ${PINATA_JWT}` } }
     )
+
     const cid = data.IpfsHash
-    res.json({ metadata_cid: cid, ipfsUri: `ipfs://${cid}`, gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}` })
+    res.json({
+      metadata_cid: cid,
+      ipfsUri: `ipfs://${cid}`,
+      gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}`,
+    })
   } catch (err) {
     console.error('[metadata] error', err?.response?.data || err.message)
     res.status(500).json({ error: 'Pin JSON failed', details: err?.response?.data || err.message })
   }
 })
 
-// ---------------- Similarity / Hashing ----------------
+// ---- Similarity / Hashing -------------------------------------------------
 
-// Compute perceptual hashes for a single file (used when saving)
+// Compute hashes for a single file (used before saving to DB)
 app.post('/api/hashes', upload.single('file'), async (req, res) => {
   console.log('[hashes] hit', req.file?.originalname, req.file?.mimetype, req.file?.size)
   try {
@@ -102,53 +147,54 @@ app.post('/api/hashes', upload.single('file'), async (req, res) => {
   }
 })
 
-// Similarity search: compute pHash then compare to recent published artworks
+// Similarity search: compute dHash, then compare to recent artworks in Supabase
 app.post('/api/verify', upload.single('artwork'), async (req, res) => {
-  console.log('[verify] hit', req.file?.originalname, req.file?.mimetype, req.file?.size)
   try {
-    if (!req.file) return res.json({ similar: [] })
+    if (!req.file) return res.status(400).json({ error: 'No file' })
+    const qHash = await dhash64(req.file.buffer)
 
-    const buf = req.file.buffer
-    const upDhash = await dhash64(buf)
+    if (!sb) return res.json({ query: qHash, similar: [] })
 
-    if (!sb) return res.json({ similar: [] }) // not configured
-
+    // Pull a recent sample of published artworks with hashes
     const { data, error } = await sb
       .from('artworks')
-      .select('id, owner, title, cover_url, dhash64, created_at')
+      .select('id,title,owner,cover_url,dhash64')
       .eq('status', 'published')
       .not('dhash64', 'is', null)
       .order('created_at', { ascending: false })
-      .limit(300)
+      .limit(200)
+
     if (error) throw error
 
-    const THRESH = 10
-    const matches = (data || [])
-      .map(row => ({ row, dist: hammingHex(upDhash, row.dhash64) }))
-      .filter(x => x.dist <= THRESH)
-      .sort((a, b) => a.dist - b.dist)
+    const SIM_THRESHOLD = 0.86 // ~<=9 bits difference for 64-bit hash
+    const results = (data || [])
+      .map((r) => {
+        if (!r.dhash64) return null
+        const dist = hammingHex(qHash, r.dhash64)
+        const score = 1 - dist / 64
+        return {
+          id: r.id,
+          title: r.title || 'Untitled',
+          username: '', // (optional: join from profiles if you maintain it)
+          user_id: r.owner,
+          image_url: r.cover_url,
+          score,
+        }
+      })
+      .filter(Boolean)
+      .filter((r) => r.score >= SIM_THRESHOLD)
+      .sort((a, b) => b.score - a.score)
       .slice(0, 12)
-      .map(({ row, dist }) => ({
-        id: row.id,
-        user_id: row.owner,
-        title: row.title || 'Untitled',
-        username: '',
-        image_url: row.cover_url,
-        score: 1 - dist / 64
-      }))
 
-    const userIds = [...new Set(matches.map(m => m.user_id))].filter(Boolean)
-    if (userIds.length) {
-      const { data: profs } = await sb.from('profiles').select('id, username').in('id', userIds)
-      const lookup = new Map((profs || []).map(p => [p.id, p.username || '']))
-      for (const m of matches) m.username = lookup.get(m.user_id) || ''
-    }
-
-    res.json({ similar: matches })
+    res.json({ query: qHash, similar: results })
   } catch (e) {
     console.error('[verify] error', e)
-    res.json({ similar: [] })
+    res.status(500).json({ error: 'verify failed' })
   }
 })
 
-app.listen(PORT, () => console.log(`API server listening on http://localhost:${PORT}`))
+// ---- Start ----------------------------------------------------------------
+
+app.listen(PORT, () => {
+  console.log(`API server listening on http://localhost:${PORT}`)
+})
