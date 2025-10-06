@@ -15,8 +15,7 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
 });
 
-// ---- Config ---------------------------------------------------------------
-
+// ── Config ───────────────────────────────────────────────────────────────────
 const PORT = Number(process.env.PORT || 5000);
 const PINATA_JWT = process.env.PINATA_JWT || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -27,11 +26,12 @@ const sb =
     ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
     : null;
 
-// ---- CORS (allow localhost + any *.vercel.app) ----------------------------
-
+// ── CORS (localhost + your vercel app) ───────────────────────────────────────
+// If you later add a custom domain, add it here.
 const allowlist = [
   "http://localhost:5173",
-  /\.vercel\.app$/i, // matches https://<project>.vercel.app
+  "https://taedal-v3.vercel.app",
+  /\.vercel\.app$/i, // any *.vercel.app
 ];
 
 app.use(
@@ -45,10 +45,10 @@ app.use(
       console.warn("[CORS] blocked origin:", origin);
       return cb(null, false);
     },
-    credentials: false,
   })
 );
 
+// Tiny log helps a ton on Render logs
 app.use((req, _res, next) => {
   console.log("[api]", req.method, req.path, "from", req.headers.origin || "no-origin");
   next();
@@ -56,13 +56,15 @@ app.use((req, _res, next) => {
 
 app.use(express.json());
 
-// ---- Healthcheck ----------------------------------------------------------
+// ── Health ───────────────────────────────────────────────────────────────────
+app.get("/api/health", (_req, res) =>
+  res.json({
+    ok: true,
+    supabase: !!sb,
+  })
+);
 
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
-
-// ---- IPFS / Pinata --------------------------------------------------------
-
-// POST /api/pinata/pin-file
+// ── Pinata: pin-file ─────────────────────────────────────────────────────────
 // expects multipart/form-data with field "file" (binary) and optional "name"
 app.post("/api/pinata/pin-file", upload.single("file"), async (req, res) => {
   try {
@@ -100,9 +102,8 @@ app.post("/api/pinata/pin-file", upload.single("file"), async (req, res) => {
   }
 });
 
-// POST /api/metadata
-// expects JSON: { name, description, image }
-// returns: { metadata_cid, metadata_url, gatewayUrl }
+// ── Pinata: pin metadata JSON ────────────────────────────────────────────────
+// expects JSON: { name, description, image, properties? }
 app.post("/api/metadata", async (req, res) => {
   try {
     if (!PINATA_JWT) return res.status(500).json({ error: "Server misconfigured: PINATA_JWT missing" });
@@ -111,7 +112,7 @@ app.post("/api/metadata", async (req, res) => {
     const metadata = {
       name: String(payload.name || "Untitled"),
       description: String(payload.description || ""),
-      image: payload.image || undefined, // e.g., "ipfs://..."; leave as-is
+      image: payload.image || undefined, // e.g. "ipfs://..."
       properties: payload.properties || undefined,
     };
 
@@ -133,9 +134,7 @@ app.post("/api/metadata", async (req, res) => {
   }
 });
 
-// ---- Similarity / Hashing -------------------------------------------------
-
-// POST /api/hashes
+// ── Hashing ──────────────────────────────────────────────────────────────────
 // expects multipart/form-data with field "file"
 app.post("/api/hashes", upload.single("file"), async (req, res) => {
   try {
@@ -149,28 +148,33 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
   }
 });
 
-// POST /api/verify
+// ── Similarity verify ────────────────────────────────────────────────────────
 // expects multipart/form-data with field "file"
-// returns: { matches: [...]} to match the client code
+// returns { matches: [...], note?: "..."}  (never 500 unless truly broken)
 app.post("/api/verify", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file" });
+
     const qHash = await dhash64(req.file.buffer);
 
-    if (!sb) return res.json({ matches: [] });
+    if (!sb) return res.json({ matches: [], note: "supabase not configured" });
 
-    // Pull a recent sample of published artworks with hashes
+    // If your RLS blocks anon reads, this will throw:
     const { data, error } = await sb
       .from("artworks")
-      .select("id,title,owner,cover_url,dhash64")
+      .select("id,title,owner,cover_url,dhash64,created_at")
       .eq("status", "published")
       .not("dhash64", "is", null)
       .order("created_at", { ascending: false })
       .limit(200);
 
-    if (error) throw error;
+    if (error) {
+      console.error("[verify] supabase error:", error.message);
+      // return a soft success so the UI doesn't hard-fail
+      return res.json({ matches: [], note: "supabase_select_error: " + error.message });
+    }
 
-    const SIM_THRESHOLD = 0.86; // ~<=9 bits difference for 64-bit hash
+    const SIM_THRESHOLD = 0.86; // ~<=9 bits different for 64-bit hash
     const matches = (data || [])
       .map((r) => {
         if (!r.dhash64) return null;
@@ -179,7 +183,7 @@ app.post("/api/verify", upload.single("file"), async (req, res) => {
         return {
           id: r.id,
           title: r.title || "Untitled",
-          username: "", // optionally join profiles for handle
+          username: "",
           user_id: r.owner,
           image_url: r.cover_url,
           score,
@@ -192,13 +196,13 @@ app.post("/api/verify", upload.single("file"), async (req, res) => {
 
     res.json({ matches });
   } catch (e) {
-    console.error("[verify] error", e);
-    res.status(500).json({ error: "verify failed" });
+    // Only truly unexpected errors land here (e.g., bad buffer)
+    console.error("[verify] error:", e);
+    res.json({ matches: [], note: "verify_unexpected: " + (e?.message || String(e)) });
   }
 });
 
-// ---- Start ----------------------------------------------------------------
-
+// ── Start ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`API server listening on http://localhost:${PORT}`);
 });

@@ -1,8 +1,6 @@
 import { API_BASE } from "./config";
 
-/**
- * Pins a file to IPFS via the server endpoint with upload progress.
- */
+/** Pins a file to IPFS via our server endpoint and reports progress. */
 export async function pinFileViaServerWithProgress(
   file: File,
   name: string,
@@ -13,7 +11,6 @@ export async function pinFileViaServerWithProgress(
   fd.append("file", file);
   fd.append("name", name);
 
-  // Use XHR to get progress in the browser
   const res = await new Promise<{ cid: string; ipfsUri: string; gatewayUrl: string }>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);

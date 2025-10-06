@@ -1,4 +1,3 @@
-// Reads runtime config injected in index.html, with sensible fallbacks.
 type WConf = {
   API_BASE?: string;
   SUPABASE_URL?: string;
