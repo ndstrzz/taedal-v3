@@ -1,10 +1,18 @@
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../state/AuthContext";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
+import useDebounce from "../hooks/useDebounce";
 
 type MiniProfile = {
   username: string | null;
+  avatar_url: string | null;
+};
+
+type SearchRow = {
+  id: string;
+  username: string | null;
+  display_name: string | null;
   avatar_url: string | null;
 };
 
@@ -12,9 +20,8 @@ export default function NavBar() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
 
+  // ----- mini avatar in the nav
   const [mini, setMini] = useState<MiniProfile | null>(null);
-  const [jump, setJump] = useState("");
-
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -27,21 +34,104 @@ export default function NavBar() {
         .select("username,avatar_url")
         .eq("id", user.id)
         .maybeSingle();
-      if (!cancelled) setMini((data as MiniProfile) || { username: null, avatar_url: null });
+      if (!cancelled) {
+        setMini((data as MiniProfile) || { username: null, avatar_url: null });
+      }
     })();
     return () => {
       cancelled = true;
     };
   }, [user]);
 
+  // Always go to /me for your own profile
   const profileHref = user ? "/me" : "/login";
 
-  function onJump(e: React.FormEvent) {
-    e.preventDefault();
-    const h = jump.trim().replace(/^@/, "");
-    if (h) navigate(`/@${h}`);
-    setJump("");
+  // ----- search state
+  const [q, setQ] = useState("");
+  const dq = useDebounce(q.trim(), 250);
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<SearchRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [active, setActive] = useState(0);
+
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // fetch results
+  useEffect(() => {
+    let cancelled = false;
+    async function run() {
+      if (!dq) {
+        setRows([]);
+        return;
+      }
+      setLoading(true);
+      // search by username prefix first, then fallback to display_name contains
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id,username,display_name,avatar_url")
+        .or(
+          `username.ilike.${dq.replace(/%/g, "\\%").replace(/_/g, "\\_")}%,
+           display_name.ilike.%${dq.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`
+        )
+        .order("username", { ascending: true, nullsFirst: true })
+        .limit(8);
+
+      if (!cancelled) {
+        setLoading(false);
+        setRows(error ? [] : (data as SearchRow[]) || []);
+        setActive(0);
+      }
+    }
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [dq]);
+
+  // open dropdown whenever there’s a query
+  useEffect(() => {
+    setOpen(Boolean(q));
+  }, [q]);
+
+  // close on click outside
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!boxRef.current) return;
+      if (!boxRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  function gotoProfile(u?: string | null) {
+    if (!u) return;
+    setOpen(false);
+    setQ("");
+    navigate(`/@${u}`);
   }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!open) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActive((i) => Math.min(i + 1, Math.max(rows.length - 1, 0)));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActive((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const pick = rows[active];
+      if (pick?.username) gotoProfile(pick.username);
+    } else if (e.key === "Escape") {
+      setOpen(false);
+      (e.target as HTMLInputElement).blur();
+    }
+  }
+
+  const hasResults = rows.length > 0;
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-neutral-800 bg-black/70 backdrop-blur">
@@ -66,17 +156,59 @@ export default function NavBar() {
           </NavLink>
         </nav>
 
-        {/* quick @username jump (optional) */}
-        <form onSubmit={onJump} className="ml-4 hidden md:flex items-center gap-2">
-          <span className="text-sm text-neutral-400">@</span>
+        {/* --- Search --- */}
+        <div ref={boxRef} className="relative mx-3 hidden w-full max-w-sm md:block">
           <input
-            value={jump}
-            onChange={(e) => setJump(e.target.value)}
-            placeholder="username"
-            className="w-36 rounded-md bg-neutral-900 px-2 py-1 text-sm border border-neutral-800"
+            ref={inputRef}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onFocus={() => q && setOpen(true)}
+            onKeyDown={onKeyDown}
+            placeholder="Search users…"
+            className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm outline-none focus:border-neutral-500"
+            aria-label="Search users"
           />
-        </form>
+          {open && (
+            <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-xl border border-neutral-800 bg-neutral-950 shadow-lg">
+              {!loading && !hasResults && dq && (
+                <div className="px-3 py-2 text-sm text-neutral-400">No matches</div>
+              )}
+              {loading && (
+                <div className="px-3 py-2 text-sm text-neutral-400">Searching…</div>
+              )}
+              {hasResults && (
+                <ul className="max-h-80 overflow-auto py-1">
+                  {rows.map((r, i) => (
+                    <li
+                      key={r.id}
+                      className={`flex cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-neutral-900 ${
+                        i === active ? "bg-neutral-900" : ""
+                      }`}
+                      onMouseEnter={() => setActive(i)}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => gotoProfile(r.username || undefined)}
+                    >
+                      <img
+                        src={r.avatar_url || "/brand/taedal-logo.svg"}
+                        className="h-6 w-6 rounded-full object-cover"
+                      />
+                      <div className="min-w-0">
+                        <div className="truncate">
+                          {r.display_name || (r.username ? `@${r.username}` : "User")}
+                        </div>
+                        {r.username && (
+                          <div className="truncate text-xs text-neutral-400">@{r.username}</div>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
 
+        {/* --- Right side --- */}
         <div className="ml-auto flex items-center gap-2">
           {user ? (
             <>
