@@ -99,23 +99,41 @@ app.post('/api/pinata/pin-file', upload.single('file'), async (req, res) => {
   }
 })
 
+// ---- IPFS / Pinata --------------------------------------------------------
+
 app.post('/api/metadata', async (req, res) => {
   try {
-    if (!PINATA_JWT) return res.status(500).json({ error: 'Server misconfigured: PINATA_JWT missing' })
+    if (!PINATA_JWT) {
+      return res.status(500).json({ error: 'Server misconfigured: PINATA_JWT missing' })
+    }
+
     const payload = req.body || {}
+
+    // Prefer `image` (already an ipfs:// url), fallback to legacy `imageCid`
+    const image =
+      typeof payload.image === 'string' && payload.image.trim()
+        ? payload.image.trim()
+        : (payload.imageCid ? `ipfs://${payload.imageCid}` : undefined)
+
     const meta = {
       name: String(payload.name || 'Untitled'),
       description: String(payload.description || ''),
-      image: payload.imageCid ? `ipfs://${payload.imageCid}` : undefined,
+      image,
+      // keep any extra attributes you might pass through
+      attributes: payload.attributes,
+      properties: payload.properties,
     }
+
     const { data } = await axios.post(
       'https://api.pinata.cloud/pinning/pinJSONToIPFS',
       meta,
       { headers: { Authorization: `Bearer ${PINATA_JWT}` } }
     )
+
     const cid = data.IpfsHash
     res.json({
       metadata_cid: cid,
+      metadata_url: `ipfs://${cid}`,                  // 👈 convenience field for the client
       ipfsUri: `ipfs://${cid}`,
       gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}`,
     })
@@ -124,6 +142,7 @@ app.post('/api/metadata', async (req, res) => {
     res.status(500).json({ error: 'Pin JSON failed', details: err?.response?.data || err.message })
   }
 })
+
 
 // ---- Similarity / Hashing -------------------------------------------------
 

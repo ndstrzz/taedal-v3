@@ -1,76 +1,93 @@
-import React, { useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams, useLocation } from "react-router-dom";
-import { useAuth } from "../state/AuthContext";
-import { supabase } from "../lib/supabase";
-import { destinationAfterAuth } from "../lib/profile";
-import "../index.css";
+import React, { useEffect, useState } from "react"
+import { Link, useNavigate, useSearchParams } from "react-router-dom"
+import { useAuth } from "../state/AuthContext"
+import { supabase } from "../lib/supabase"
+import "../index.css"
 
 export default function Login() {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const [params] = useSearchParams();
-  const next = params.get("next");
-  const { user, loading } = useAuth();
+  const navigate = useNavigate()
+  const [params] = useSearchParams()
+  const next = params.get("next") || "/"
+  const confirmed = params.get("confirmed")
+  const noticeParam = params.get("notice")
 
-  const [form, setForm] = useState({ email: "", password: "" });
-  const [showPw, setShowPw] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { user, loading } = useAuth()
 
-  // If already logged in, decide destination (/@username or /settings)
+  const [form, setForm] = useState({ email: "", password: "" })
+  const [showPw, setShowPw] = useState(false)
+  const [msg, setMsg] = useState<string | null>(noticeParam ? decodeURIComponent(noticeParam) : null)
+  const [busy, setBusy] = useState(false)
+
   useEffect(() => {
-    (async () => {
-      if (!loading && user) {
-        const dest = await destinationAfterAuth(user.id, next);
-        navigate(dest, { replace: true });
-      }
-    })();
-  }, [loading, user, next, navigate]);
+    // If auth hash tokens came back (after clicking email link), Supabase will
+    // recover the session on first load. Then we can redirect.
+    if (!loading && user) {
+      navigate(next, { replace: true })
+    }
+  }, [loading, user, next, navigate])
 
   async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setMsg(null);
+    e.preventDefault()
+    setBusy(true)
+    setMsg(null)
     const { data, error } = await supabase.auth.signInWithPassword({
       email: form.email.trim(),
       password: form.password,
-    });
-    setBusy(false);
+    })
+    setBusy(false)
     if (error) {
-      setMsg(error.message);
-      return;
+      // Special UX for unconfirmed email
+      if (/Email not confirmed/i.test(error.message)) {
+        setMsg("Email not confirmed. Check your inbox, or resend the confirmation email below.")
+      } else {
+        setMsg(error.message)
+      }
+      return
     }
     if (data.user) {
-      const dest = await destinationAfterAuth(data.user.id, next);
-      navigate(dest, { replace: true });
+      navigate(next, { replace: true })
     }
   }
 
   async function googleSignIn() {
-    setBusy(true);
-    setMsg(null);
+    setBusy(true)
+    setMsg(null)
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: {
-        // Return to /login so this component can route you to /@username or /settings
-        redirectTo: `${window.location.origin}/login?next=${encodeURIComponent(next || "")}`,
-      },
-    });
-    setBusy(false);
-    if (error) setMsg(error.message);
+      options: { redirectTo: window.location.origin + "/login?confirmed=1" },
+    })
+    setBusy(false)
+    if (error) setMsg(error.message)
   }
 
-  // Optional: show notice from redirects (e.g., from signup)
-  const stateNotice = (location.state as any)?.notice;
+  async function resendConfirmation() {
+    if (!form.email) {
+      setMsg("Enter your email above, then click Resend confirmation.")
+      return
+    }
+    try {
+      setBusy(true)
+      setMsg(null)
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email: form.email.trim(),
+        options: { emailRedirectTo: window.location.origin + "/login?confirmed=1" },
+      })
+      setBusy(false)
+      if (error) throw error
+      setMsg("Confirmation email sent. Check your inbox.")
+    } catch (e: any) {
+      setMsg(e?.message || "Failed to resend confirmation.")
+    }
+  }
 
   return (
     <div className="mx-auto max-w-md p-6">
-      <h1 className="mb-4 text-2xl font-semibold">Log in</h1>
+      <h1 className="text-2xl font-semibold mb-4">Log in</h1>
 
-      {(stateNotice || msg) && (
-        <div className="mb-3 text-sm">
-          {stateNotice && <div className="text-neutral-300">{stateNotice}</div>}
-          {msg && <div className="text-red-400">{msg}</div>}
+      {(confirmed || msg) && (
+        <div className="mb-3 rounded-lg border border-green-600/40 bg-green-500/10 p-3 text-sm text-green-200">
+          {confirmed ? "Email confirmed! You can sign in now." : msg}
         </div>
       )}
 
@@ -123,12 +140,23 @@ export default function Login() {
         </button>
       </form>
 
+      <div className="mt-3">
+        <button
+          type="button"
+          onClick={resendConfirmation}
+          className="rounded-lg border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900"
+          disabled={busy}
+        >
+          Resend confirmation email
+        </button>
+      </div>
+
       <p className="mt-4 text-sm text-neutral-400">
         Don’t have an account?{" "}
-        <Link className="underline" to={`/signup?next=${encodeURIComponent(next || "")}`}>
+        <Link className="underline" to={`/signup?next=${encodeURIComponent(next)}`}>
           Sign up
         </Link>
       </p>
     </div>
-  );
+  )
 }

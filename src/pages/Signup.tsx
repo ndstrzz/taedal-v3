@@ -1,134 +1,135 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { supabase } from "../lib/supabase";
-import useDebounce from "../hooks/useDebounce";
-import { ensureProfileRow } from "../lib/profile";
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { supabase } from '../lib/supabase'
+import useDebounce from '../hooks/useDebounce'
+import { saveDraft } from '../lib/draft'
 
 const roles = [
-  { key: "artist", label: "Artist" },
-  { key: "collector", label: "Collector" },
-  { key: "brand", label: "Brand" },
-] as const;
+  { key: 'artist', label: 'Artist' },
+  { key: 'collector', label: 'Collector' },
+  { key: 'brand', label: 'Brand' }
+] as const
 
 export default function Signup() {
-  const [params] = useSearchParams();
-  const next = params.get("next") || undefined;
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [username, setUsername] = useState('')
+  const dUsername = useDebounce(username.toLowerCase().trim(), 400)
+  const [usernameFree, setUsernameFree] = useState<boolean | null>(null)
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [username, setUsername] = useState("");
-  const dUsername = useDebounce(username.toLowerCase().trim(), 400);
-  const [usernameFree, setUsernameFree] = useState<boolean | null>(null);
+  const [role, setRole] = useState<typeof roles[number]['key']>('artist')
+  const [invite, setInvite] = useState('')
+  const [agree, setAgree] = useState(false)
 
-  const [role, setRole] = useState<typeof roles[number]["key"]>("artist");
-  const [invite, setInvite] = useState("");
-  const [agree, setAgree] = useState(false);
-
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
-  const nav = useNavigate();
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  const nav = useNavigate()
 
   function validateUsername(u: string) {
-    return /^[a-z0-9_]{3,20}$/.test(u);
+    return /^[a-z0-9_]{3,20}$/.test(u)
   }
 
-  // Username availability (HEAD count)
+  // Username availability (uses count)
   useEffect(() => {
-    let cancelled = false;
+    let cancelled = false
     async function run() {
-      setUsernameFree(null);
-      if (!validateUsername(dUsername)) return;
+      setUsernameFree(null)
+      if (!validateUsername(dUsername)) return
       const { count, error } = await supabase
-        .from("profiles")
-        .select("id", { count: "exact", head: true })
-        .eq("username", dUsername);
-      if (!cancelled) setUsernameFree(!error && (count ?? 0) === 0);
+        .from('profiles')
+        .select('id', { count: 'exact', head: true })
+        .eq('username', dUsername)
+      if (!cancelled) setUsernameFree(!error && (count ?? 0) === 0)
     }
-    if (dUsername) run();
-    return () => {
-      cancelled = true;
-    };
-  }, [dUsername]);
+    if (dUsername) run()
+    return () => { cancelled = true }
+  }, [dUsername])
 
   async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setErr("");
+    e.preventDefault()
+    setErr('')
 
-    const uname = username.toLowerCase().trim();
+    const uname = username.toLowerCase().trim()
     if (!validateUsername(uname)) {
-      setErr("Username must be 3–20 chars a–z 0–9 _.");
-      return;
+      setErr('Username must be 3–20 chars a–z 0–9 _.')
+      return
     }
     if (usernameFree === false) {
-      setErr("That username is taken.");
-      return;
+      setErr('That username is taken.')
+      return
     }
     if (!agree) {
-      setErr("Please agree to the Terms & Privacy.");
-      return;
+      setErr('Please agree to the Terms & Privacy.')
+      return
     }
 
-    setBusy(true);
+    setBusy(true)
     try {
-      const { data, error } = await supabase.auth.signUp({ email, password });
-      if (error) throw error;
+      // Remember the user's desired profile so we can upsert later
+      saveDraft({
+        displayName: displayName.trim(),
+        username: uname,
+        role,
+        invite: invite.trim() || undefined
+      })
 
-      // If email confirmations are ON, there is no session yet
+      // Tell Supabase where to send users after they click the email link.
+      const emailRedirectTo = `${window.location.origin}/login?confirmed=1`
+
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { emailRedirectTo }
+      })
+      if (error) throw error
+
+      // If confirmations are required, data.session will be null.
       if (!data.session) {
-        nav("/login", {
-          state: { notice: "Check your email to confirm your account, then log in." },
-        });
-        return;
+        nav(`/login?notice=${encodeURIComponent('We’ve sent you a confirmation email. Click the link, then sign in.')}`, { replace: true })
+        return
       }
 
-      // We have a session → upsert profile immediately
-      const user = data.session.user;
-      await ensureProfileRow(user.id);
+      // If confirmations are disabled and we DO have a session, upsert profile now
+      const user = data.session.user
+      const { error: upErr } = await supabase.from('profiles').upsert({
+        id: user.id,
+        username: uname,
+        display_name: displayName.trim(),
+        role,
+        invite_code: invite || null
+      })
+      if (upErr) throw upErr
 
-      const { error: upErr } = await supabase.from("profiles").upsert(
-        {
-          id: user.id,
-          username: uname,
-          display_name: displayName.trim(),
-          role,
-          invite_code: invite || null,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "id" }
-      );
-      if (upErr) throw upErr;
-
-      // Straight to their profile
-      nav(`/@${uname}`, { replace: true });
+      nav(`/@${uname}`, { replace: true })
     } catch (e: any) {
-      setErr(e?.message || "Sign up failed");
+      setErr(e?.message || 'Sign up failed')
     } finally {
-      setBusy(false);
+      setBusy(false)
     }
   }
 
   async function signupWithGoogle() {
-    setErr("");
+    setErr('')
     try {
       const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
+        provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/login?next=${encodeURIComponent(next || "")}`,
-        },
-      });
-      if (error) throw error;
+          redirectTo: window.location.origin + '/login?confirmed=1'
+        }
+      })
+      if (error) throw error
     } catch (e: any) {
-      setErr(e?.message || "Google sign-in failed");
+      setErr(e?.message || 'Google sign-in failed')
     }
   }
 
   const unameHint = useMemo(() => {
-    if (!username) return "";
-    if (!validateUsername(username)) return "Use 3–20 lowercase letters, numbers, or _.";
-    if (usernameFree === null) return "Checking availability…";
-    return usernameFree ? "Available ✓" : "Taken ✕";
-  }, [username, usernameFree]);
+    if (!username) return ''
+    if (!validateUsername(username)) return 'Use 3–20 lowercase letters, numbers, or _.'
+    if (usernameFree === null) return 'Checking availability…'
+    return usernameFree ? 'Available ✓' : 'Taken ✕'
+  }, [username, usernameFree])
 
   return (
     <div className="mx-auto max-w-lg p-6">
@@ -141,7 +142,7 @@ export default function Signup() {
             type="text"
             placeholder="Display name (e.g., KURO Studio)"
             value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
+            onChange={e => setDisplayName(e.target.value)}
             className="w-full rounded-lg bg-elev1 p-3 ring-1 ring-border focus:outline-none focus:ring-brand"
             required
           />
@@ -152,16 +153,12 @@ export default function Signup() {
                 type="text"
                 placeholder="username"
                 value={username}
-                onChange={(e) => setUsername(e.target.value.toLowerCase())}
+                onChange={e => setUsername(e.target.value.toLowerCase())}
                 className="w-full rounded-lg bg-elev1 p-3 ring-1 ring-border focus:outline-none focus:ring-brand"
                 required
               />
             </div>
-            <div
-              className={`text-xs ${
-                usernameFree ? "text-success" : usernameFree === false ? "text-error" : "text-subtle"
-              }`}
-            >
+            <div className={`text-xs ${usernameFree ? 'text-success' : usernameFree === false ? 'text-error' : 'text-subtle'}`}>
               {unameHint}
             </div>
           </div>
@@ -172,7 +169,7 @@ export default function Signup() {
             type="email"
             placeholder="you@example.com"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={e => setEmail(e.target.value)}
             className="w-full rounded-lg bg-elev1 p-3 ring-1 ring-border focus:outline-none focus:ring-brand"
             required
           />
@@ -180,21 +177,21 @@ export default function Signup() {
             type="password"
             placeholder="Password (min 6 chars)"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={e => setPassword(e.target.value)}
             className="w-full rounded-lg bg-elev1 p-3 ring-1 ring-border focus:outline-none focus:ring-brand"
             required
           />
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <span className="mr-2 text-sm text-subtle">I am a</span>
-          {roles.map((r) => (
+          <span className="text-sm text-subtle mr-2">I am a</span>
+          {roles.map(r => (
             <button
               key={r.key}
               type="button"
               onClick={() => setRole(r.key)}
               className={`rounded-full px-3 py-1 text-sm ring-1 ${
-                role === r.key ? "bg-brand/20 ring-brand/50" : "bg-elev1 ring-border hover:bg-elev2"
+                role === r.key ? 'bg-brand/20 ring-brand/50' : 'bg-elev1 ring-border hover:bg-elev2'
               }`}
             >
               {r.label}
@@ -206,39 +203,25 @@ export default function Signup() {
           type="text"
           placeholder="Invite code (optional)"
           value={invite}
-          onChange={(e) => setInvite(e.target.value)}
+          onChange={e => setInvite(e.target.value)}
           className="w-full rounded-lg bg-elev1 p-3 ring-1 ring-border focus:outline-none focus:ring-brand"
         />
 
         <label className="mt-2 flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
+          <input type="checkbox" checked={agree} onChange={e => setAgree(e.target.checked)} />
           <span>
-            I agree to the{" "}
-            <a className="underline" href="#" onClick={(e) => e.preventDefault()}>
-              Terms
-            </a>{" "}
-            and{" "}
-            <a className="underline" href="#" onClick={(e) => e.preventDefault()}>
-              Privacy
-            </a>
-            .
+            I agree to the <a className="underline" href="#" onClick={e => e.preventDefault()}>Terms</a> and <a className="underline" href="#" onClick={e => e.preventDefault()}>Privacy</a>.
           </span>
         </label>
 
         {err && <div className="text-error text-sm">{err}</div>}
 
-        <button
-          disabled={busy}
-          className="w-full rounded-lg bg-brand/20 p-3 text-sm ring-1 ring-brand/50 hover:bg-brand/30"
-        >
-          {busy ? "Creating…" : "Create account"}
+        <button disabled={busy} className="w-full rounded-lg bg-brand/20 p-3 text-sm ring-1 ring-brand/50 hover:bg-brand/30">
+          {busy ? 'Creating…' : 'Create account'}
         </button>
 
-        <button
-          type="button"
-          onClick={signupWithGoogle}
-          className="w-full rounded-lg bg-elev1 p-3 text-sm ring-1 ring-border hover:bg-elev2"
-        >
+        <button type="button" onClick={signupWithGoogle}
+          className="w-full rounded-lg bg-elev1 p-3 text-sm ring-1 ring-border hover:bg-elev2">
           Continue with Google
         </button>
       </form>
@@ -247,5 +230,5 @@ export default function Signup() {
         Already have an account? <Link to="/login" className="text-text underline">Log in</Link>
       </p>
     </div>
-  );
+  )
 }
