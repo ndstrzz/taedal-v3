@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../state/AuthContext";
 import { supabase } from "../lib/supabase";
@@ -31,21 +31,15 @@ export default function MyProfile() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
 
+  // counts
   const [counts, setCounts] = useState<Counts>({ posts: 0, followers: 0, following: 0 });
-  const [loadingCounts, setLoadingCounts] = useState(false);
 
+  // artworks grid
   const [artworks, setArtworks] = useState<Artwork[]>([]);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => { alive.current = false; };
-  }, []);
-
-  // Load profile
   useEffect(() => {
     (async () => {
       if (!user) return;
@@ -55,26 +49,23 @@ export default function MyProfile() {
         .select("id,username,display_name,bio,avatar_url,cover_url")
         .eq("id", user.id)
         .maybeSingle();
-      if (!alive.current) return;
+
       setLoadingProfile(false);
       if (error || !data) return;
       setProfile(data as Profile);
     })();
   }, [user]);
 
-  // Load counts from the view
+  // counts via view
   useEffect(() => {
     if (!profile) return;
     (async () => {
-      setLoadingCounts(true);
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from("profile_counts")
         .select("posts,followers,following")
         .eq("user_id", profile.id)
         .maybeSingle();
-      if (!alive.current) return;
-      setLoadingCounts(false);
-      if (error) return;
+
       setCounts({
         posts: data?.posts ?? 0,
         followers: data?.followers ?? 0,
@@ -83,9 +74,9 @@ export default function MyProfile() {
     })();
   }, [profile]);
 
-  // Grid loader
+  // grid loader
   async function loadMore() {
-    if (!profile || loadingMore || !hasMore) return;
+    if (!profile || loadingMore) return;
     setLoadingMore(true);
     const from = page * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
@@ -98,7 +89,6 @@ export default function MyProfile() {
       .order("created_at", { ascending: false })
       .range(from, to);
 
-    if (!alive.current) return;
     setLoadingMore(false);
     if (error) return;
 
@@ -109,7 +99,7 @@ export default function MyProfile() {
     setHasMore(from + rows.length < total);
   }
 
-  // Reset grid on profile change
+  // when profile changes, reset grid and load first page
   useEffect(() => {
     setArtworks([]);
     setPage(0);
@@ -127,12 +117,16 @@ export default function MyProfile() {
     return (
       <div className="p-8">
         <p className="mb-4 text-neutral-300">Please log in to view your profile.</p>
-        <Link to="/login" className="underline">Go to log in</Link>
+        <Link to="/login" className="underline">
+          Go to log in
+        </Link>
       </div>
     );
   }
 
-  if (loadingProfile) return <div className="p-8 text-neutral-400">Loading profile…</div>;
+  if (loadingProfile) {
+    return <div className="p-8 text-neutral-400">Loading profile…</div>;
+  }
 
   if (!profile) {
     return (
@@ -180,10 +174,15 @@ export default function MyProfile() {
 
         {/* Stats */}
         <div className="mt-6 flex gap-6 text-sm">
-          <div><span className="font-semibold">{counts.posts}</span> posts</div>
-          <div><span className="font-semibold">{counts.followers}</span> followers</div>
-          <div><span className="font-semibold">{counts.following}</span> following</div>
-          {loadingCounts && <div className="text-neutral-500">updating…</div>}
+          <div>
+            <span className="font-semibold">{counts.posts}</span> posts
+          </div>
+          <div>
+            <span className="font-semibold">{counts.followers}</span> followers
+          </div>
+          <div>
+            <span className="font-semibold">{counts.following}</span> following
+          </div>
         </div>
       </div>
 

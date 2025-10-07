@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useToast } from "../components/Toaster";
@@ -34,6 +34,7 @@ export default function PublicProfile() {
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
 
   const [counts, setCounts] = useState<Counts>({ posts: 0, followers: 0, following: 0 });
 
@@ -42,22 +43,25 @@ export default function PublicProfile() {
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const alive = useRef(true);
-  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  // follow state
+  const [isFollowing, setIsFollowing] = useState<boolean>(false);
+  const [followBusy, setFollowBusy] = useState(false);
 
   // Fetch profile by username
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
+      setErr(null);
       const { data, error } = await supabase
         .from("profiles")
-        .select("id,username,display_name,bio,avatar_url,cover_url")
+        .select("*")
         .eq("username", username)
         .maybeSingle();
 
       if (cancelled) return;
       if (error || !data) {
+        setErr(error?.message || "notfound");
         setProfile(null);
         setLoading(false);
         return;
@@ -65,20 +69,20 @@ export default function PublicProfile() {
       setProfile(data as Profile);
       setLoading(false);
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [username]);
 
-  // Counts from the view
+  // counts via view
   useEffect(() => {
     if (!profile) return;
     (async () => {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from("profile_counts")
         .select("posts,followers,following")
         .eq("user_id", profile.id)
         .maybeSingle();
-      if (!alive.current) return;
-      if (error) return;
       setCounts({
         posts: data?.posts ?? 0,
         followers: data?.followers ?? 0,
@@ -87,11 +91,67 @@ export default function PublicProfile() {
     })();
   }, [profile]);
 
+  // initial follow state (if signed in & not own profile)
+  useEffect(() => {
+    if (!user || !profile || user.id === profile.id) {
+      setIsFollowing(false);
+      return;
+    }
+    (async () => {
+      const { count } = await supabase
+        .from("follows")
+        .select("follower_id", { count: "exact", head: true })
+        .eq("follower_id", user.id)
+        .eq("target_id", profile.id);
+      setIsFollowing((count ?? 0) > 0);
+    })();
+  }, [user, profile]);
+
+  async function toggleFollow() {
+    if (!user || !profile || user.id === profile.id || followBusy) return;
+    setFollowBusy(true);
+    try {
+      if (isFollowing) {
+        // unfollow
+        const { error } = await supabase
+          .from("follows")
+          .delete()
+          .eq("follower_id", user.id)
+          .eq("target_id", profile.id);
+        if (error) throw error;
+        setIsFollowing(false);
+      } else {
+        // follow
+        const { error } = await supabase
+          .from("follows")
+          .insert({ follower_id: user.id, target_id: profile.id });
+        if (error) throw error;
+        setIsFollowing(true);
+      }
+
+      // refresh counts after change
+      const { data } = await supabase
+        .from("profile_counts")
+        .select("posts,followers,following")
+        .eq("user_id", profile.id)
+        .maybeSingle();
+      setCounts({
+        posts: data?.posts ?? 0,
+        followers: data?.followers ?? 0,
+        following: data?.following ?? 0,
+      });
+    } catch (e: any) {
+      toast({ variant: "error", title: "Follow action failed", description: e?.message || String(e) });
+    } finally {
+      setFollowBusy(false);
+    }
+  }
+
   async function loadMore() {
-    if (!profile || loadingMore || !hasMore) return;
+    if (!profile) return;
     setLoadingMore(true);
     const from = page * PAGE_SIZE;
-       const to = from + PAGE_SIZE - 1;
+    const to = from + PAGE_SIZE - 1;
 
     const { data, error, count } = await supabase
       .from("artworks")
@@ -101,7 +161,6 @@ export default function PublicProfile() {
       .order("created_at", { ascending: false })
       .range(from, to);
 
-    if (!alive.current) return;
     if (error) {
       toast({ variant: "error", title: "Couldn’t load artworks", description: error.message });
       setLoadingMore(false);
@@ -131,8 +190,11 @@ export default function PublicProfile() {
     [profile]
   );
 
-  if (loading) return <div className="p-8 text-neutral-400">Loading profile…</div>;
+  if (loading) {
+    return <div className="p-8 text-neutral-400">Loading profile…</div>;
+  }
 
+  // Not found UX: suggest settings if this *might* be the owner
   if (!profile) {
     return (
       <div className="p-8">
@@ -149,12 +211,19 @@ export default function PublicProfile() {
     );
   }
 
+  const showFollow = user && user.id !== profile.id;
+
   return (
     <div>
       {/* Cover */}
       <div className="h-48 w-full bg-neutral-900">
         {profile.cover_url && (
-          <img src={profile.cover_url} alt="" className="h-48 w-full object-cover" loading="lazy" />
+          <img
+            src={profile.cover_url}
+            alt=""
+            className="h-48 w-full object-cover"
+            loading="lazy"
+          />
         )}
       </div>
 
@@ -168,21 +237,49 @@ export default function PublicProfile() {
           />
           <div className="flex-1 pb-2">
             <h1 className="text-2xl font-semibold">{displayName}</h1>
-            {profile.username && <div className="text-sm text-neutral-400">@{profile.username}</div>}
-            {profile.bio && <p className="mt-2 max-w-2xl text-neutral-300">{profile.bio}</p>}
+            {profile.username && (
+              <div className="text-sm text-neutral-400">@{profile.username}</div>
+            )}
+            {profile.bio && <p className="mt-2 max-w-3xl text-neutral-300">{profile.bio}</p>}
           </div>
+
+          {showFollow && (
+            <button
+              onClick={toggleFollow}
+              disabled={followBusy}
+              className={`mb-2 rounded-xl px-3 py-1.5 text-sm border ${
+                isFollowing
+                  ? "border-neutral-600 bg-neutral-800 hover:bg-neutral-700"
+                  : "border-neutral-700 hover:bg-neutral-900"
+              }`}
+            >
+              {followBusy ? "…" : isFollowing ? "Following" : "Follow"}
+            </button>
+          )}
         </div>
 
         {/* Stats */}
         <div className="mt-6 flex gap-6 text-sm">
-          <div><span className="font-semibold">{counts.posts}</span> posts</div>
-          <div><span className="font-semibold">{counts.followers}</span> followers</div>
-          <div><span className="font-semibold">{counts.following}</span> following</div>
+          <div>
+            <span className="font-semibold">{counts.posts}</span> posts
+          </div>
+          <div>
+            <span className="font-semibold">{counts.followers}</span> followers
+          </div>
+          <div>
+            <span className="font-semibold">{counts.following}</span> following
+          </div>
         </div>
       </div>
 
       {/* Artworks grid */}
       <div className="mx-auto max-w-6xl px-4 py-8">
+        <h2 className="mb-4 text-lg font-semibold">Artworks</h2>
+
+        {artworks.length === 0 && !hasMore && (
+          <div className="text-neutral-400">No published artworks yet.</div>
+        )}
+
         <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
           {artworks.map((a) => {
             const img = a.cover_url || ipfs(a.image_cid);
@@ -222,10 +319,6 @@ export default function PublicProfile() {
               {loadingMore ? "Loading…" : "Load more"}
             </button>
           </div>
-        )}
-
-        {!hasMore && artworks.length === 0 && (
-          <div className="text-neutral-400">No published artworks yet.</div>
         )}
       </div>
     </div>
