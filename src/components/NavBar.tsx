@@ -1,6 +1,6 @@
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../state/AuthContext";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import useDebounce from "../hooks/useDebounce";
 
@@ -57,7 +57,7 @@ export default function NavBar() {
   const boxRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // fetch results
+  // fetch results (from the VIEW)
   useEffect(() => {
     let cancelled = false;
     async function run() {
@@ -66,20 +66,23 @@ export default function NavBar() {
         return;
       }
       setLoading(true);
-      // search by username prefix first, then fallback to display_name contains
+
+      // escape % and _ for ILIKE
+      const esc = dq.replace(/%/g, "\\%").replace(/_/g, "\\_");
+
       const { data, error } = await supabase
-        .from("profiles")
+        .from("public_profiles") // 👈 use the view
         .select("id,username,display_name,avatar_url")
         .or(
-          `username.ilike.${dq.replace(/%/g, "\\%").replace(/_/g, "\\_")}%,
-           display_name.ilike.%${dq.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`
+          `username.ilike.${esc}%` + // starts-with username
+          `,display_name.ilike.%${esc}%` // contains display name
         )
         .order("username", { ascending: true, nullsFirst: true })
         .limit(8);
 
       if (!cancelled) {
         setLoading(false);
-        setRows(error ? [] : (data as SearchRow[]) || []);
+        setRows(error ? [] : ((data as SearchRow[]) || []));
         setActive(0);
       }
     }
