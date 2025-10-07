@@ -53,6 +53,7 @@ export default function CreateArtwork() {
   // temp values carried into mint step
   const [pendingMetaUrl, setPendingMetaUrl] = useState<string>(""); // ipfs://...
   const [pendingImageCid, setPendingImageCid] = useState<string>("");
+  const [pendingArtworkNum, setPendingArtworkNum] = useState<number | null>(null);
 
   // skeleton for first mount
   const [initializing, setInitializing] = useState(true);
@@ -136,14 +137,17 @@ export default function CreateArtwork() {
       setCandidates(null);
       try {
         const fd = new FormData();
+        // NOTE: server /api/verify expects field "artwork" in your older code,
+        // but our Express route was written to accept "file". Keep “file”.
         fd.append("file", file);
         const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/verify`, {
           method: "POST",
           body: fd,
         });
         if (!r.ok) throw new Error(`Similarity check failed (${r.status})`);
-        const out = (await r.json()) as { matches?: SimilarRecord[]; note?: string };
-        const results = Array.isArray(out?.matches) ? out.matches : [];
+        // our server returns { query, similar: [] }
+        const out = (await r.json()) as { similar?: SimilarRecord[] };
+        const results = Array.isArray(out?.similar) ? out.similar : [];
         setCandidates(results);
         if (results.length > 0) {
           toast({
@@ -218,11 +222,7 @@ export default function CreateArtwork() {
         const metadata = {
           name: title.trim(),
           description: description.trim(),
-          image: pin.ipfsUri ?? `ipfs://${pin.cid}`,
-          properties: {
-            bytes: file.size,
-            mime_type: file.type,
-          },
+          imageCid: pin.cid, // our /api/metadata understands imageCid
         };
         const r2 = await fetch(`${API_BASE.replace(/\/$/, "")}/api/metadata`, {
           method: "POST",
@@ -230,16 +230,21 @@ export default function CreateArtwork() {
           body: JSON.stringify(metadata),
         });
         if (!r2.ok) throw new Error(`Failed to pin metadata (${r2.status})`);
-        const { metadata_cid, metadata_url } = await r2.json();
+        const metaOut = await r2.json();
+        const metadataUri =
+          metaOut?.gatewayUrl?.replace("https://gateway.pinata.cloud/ipfs/", "ipfs://") ||
+          metaOut?.ipfsUri ||
+          `ipfs://${metaOut?.metadata_cid}`;
         toast({ variant: "success", title: "Pinned metadata" });
 
-        // 4) Open mint modal with the tokenURI
-        setPendingMetaUrl(metadata_url ?? `ipfs://${metadata_cid}`);
+        // Prepare values for mint step
+        setPendingMetaUrl(metadataUri);
         setPendingImageCid(pin.cid);
+        setPendingArtworkNum(Math.floor(Date.now() / 1000)); // numeric tag for mintWithURI
+
+        // Open wallet modal
         setMintErr(null);
         setMintOpen(true);
-
-        // keep busy spinner while modal is open
       } catch (err: any) {
         toast({
           variant: "error",
@@ -258,7 +263,8 @@ export default function CreateArtwork() {
     try {
       setMintBusy(true);
       setMintErr(null);
-      const { txHash, tokenId, minter } = await mintWithMetaMask(pendingMetaUrl);
+      const artworkNum = pendingArtworkNum ?? Math.floor(Date.now() / 1000);
+      const { txHash, tokenId } = await mintWithMetaMask(pendingMetaUrl, artworkNum);
 
       toast({
         variant: "success",
@@ -461,7 +467,6 @@ export default function CreateArtwork() {
         busy={mintBusy}
         error={mintErr || null}
         onClose={() => {
-          // allow closing; user can try again by clicking Create again or we could add a "Mint now" button
           setMintOpen(false);
           setBusy(false);
         }}
