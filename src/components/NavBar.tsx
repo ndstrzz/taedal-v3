@@ -1,81 +1,103 @@
-import { Link, useNavigate } from 'react-router-dom'
-import ConnectWallet from './ConnectWallet'
-import { useAuth } from '../state/AuthContext'
-import { useProfile } from '../hooks/useProfile'
-import { supabase } from '../lib/supabase'
-import { DEFAULT_AVATAR_URL } from '../lib/config'
-import { useEffect, useState } from 'react'
+// src/components/NavBar.tsx
+import { Link, NavLink, useNavigate } from "react-router-dom";
+import { useAuth } from "../state/AuthContext";
+import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
-function avatarLetter(email?: string | null) {
-  if (!email) return 'U'
-  return email.charAt(0).toUpperCase()
-}
+type MiniProfile = {
+  username: string | null;
+  avatar_url: string | null;
+};
 
 export default function NavBar() {
-  const { user } = useAuth()
-  const { profile } = useProfile()
-  const nav = useNavigate()
+  const { user, signOut } = useAuth();
+  const navigate = useNavigate();
 
-  // bust the avatar cache whenever settings are saved
-  const [bustKey, setBustKey] = useState<number>(0)
+  const [mini, setMini] = useState<MiniProfile | null>(null);
+
   useEffect(() => {
-    const onUpd = () => setBustKey(Date.now())
-    window.addEventListener('profile-updated', onUpd)
-    return () => window.removeEventListener('profile-updated', onUpd)
-  }, [])
+    let cancelled = false;
+    (async () => {
+      if (!user) {
+        setMini(null);
+        return;
+      }
+      const { data } = await supabase
+        .from("profiles")
+        .select("username,avatar_url")
+        .eq("id", user.id)
+        .maybeSingle();
+      if (!cancelled) setMini((data as MiniProfile) || { username: null, avatar_url: null });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
-  async function onLogout() {
-    try { await supabase.auth.signOut() } finally { nav('/', { replace: true }) }
-  }
-
-  const myHref = profile?.username ? `/@${profile.username}` : '/settings'
-  const avatarSrc =
-    (profile?.avatar_url ? `${profile.avatar_url}${profile.avatar_url.includes('?') ? '&' : '?'}v=${bustKey}` : null) ||
-    DEFAULT_AVATAR_URL
+  const profileHref = mini?.username ? `/@${mini.username}` : "/settings";
 
   return (
-    <header className="sticky top-0 z-50 h-14 border-b border-border bg-bg/80 backdrop-blur">
-      <div className="mx-auto flex h-full max-w-6xl items-center justify-between px-4">
-        <Link to="/" className="flex items-center gap-3">
-          <img src="/brand/taedal-logo.svg" className="h-6 w-6 rounded-md ring-1 ring-brand/40" alt="logo" />
-          <span className="text-body font-medium tracking-wide">taedal</span>
+    <header className="sticky top-0 z-40 w-full border-b border-neutral-800 bg-black/70 backdrop-blur">
+      <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4">
+        <Link to="/" className="flex items-center gap-2">
+          <img src="/brand/taedal-logo.svg" className="h-6 w-6" />
+          <span className="font-semibold">taedal</span>
         </Link>
 
-        <nav className="flex items-center gap-6">
-          <Link to="/community" className="text-sm text-text/80 hover:text-text">Community</Link>
-          <Link to="/portfolio" className="text-sm text-text/80 hover:text-text">Portfolio</Link>
-          <Link to="/create" className="rounded-lg bg-brand/20 px-3 py-1.5 text-sm ring-1 ring-brand/50 hover:bg-brand/30">
+        <nav className="ml-6 hidden gap-4 md:flex">
+          <NavLink to="/community" className="text-sm text-neutral-300 hover:text-white">
+            Community
+          </NavLink>
+          <NavLink to="/portfolio" className="text-sm text-neutral-300 hover:text-white">
+            Portfolio
+          </NavLink>
+          <NavLink to="/create" className="rounded-lg border border-neutral-700 px-2 py-1 text-sm hover:bg-neutral-900">
             Create
-          </Link>
+          </NavLink>
+        </nav>
 
-          {!user ? (
-            <div className="flex items-center gap-3">
-              <Link to="/login" className="text-sm text-text/80 hover:text-text">Log in</Link>
-              <Link to="/signup" className="rounded-lg bg-elev1 px-3 py-1.5 text-sm ring-1 ring-border hover:bg-elev2">
+        <div className="ml-auto flex items-center gap-2">
+          {user ? (
+            <>
+              <Link
+                to={profileHref}
+                className="flex items-center gap-2 rounded-lg px-2 py-1 text-sm hover:bg-neutral-900"
+                title="Profile"
+              >
+                <img
+                  src={mini?.avatar_url || "/brand/taedal-logo.svg"}
+                  className="h-6 w-6 rounded-full object-cover"
+                />
+                <span className="hidden sm:inline">Profile</span>
+              </Link>
+              <button
+                onClick={() => signOut().then(() => navigate("/", { replace: true }))}
+                className="rounded-lg px-2 py-1 text-sm text-neutral-300 hover:bg-neutral-900"
+              >
+                Logout
+              </button>
+            </>
+          ) : (
+            <>
+              <Link to="/login" className="rounded-lg px-2 py-1 text-sm hover:bg-neutral-900">
+                Log in
+              </Link>
+              <Link
+                to="/signup"
+                className="rounded-lg border border-neutral-700 px-2 py-1 text-sm hover:bg-neutral-900"
+              >
                 Sign up
               </Link>
-            </div>
-          ) : (
-            <div className="flex items-center gap-3">
-              {/* Profile avatar → public profile */}
-              <Link to={myHref} className="flex items-center gap-2">
-                <div className="grid h-7 w-7 place-items-center overflow-hidden rounded-full bg-elev1 ring-1 ring-border">
-                  {profile?.avatar_url ? (
-                    <img src={avatarSrc} className="h-full w-full object-cover" />
-                  ) : (
-                    <span className="text-xs">{avatarLetter(user.email)}</span>
-                  )}
-                </div>
-                <span className="text-sm text-text/85 hover:text-text">Profile</span>
-              </Link>
-
-              <button onClick={onLogout} className="text-sm text-subtle hover:text-text">Logout</button>
-            </div>
+            </>
           )}
-
-          <ConnectWallet />
-        </nav>
+          <Link
+            to="/connect"
+            className="rounded-lg border border-neutral-700 px-2 py-1 text-sm hover:bg-neutral-900"
+          >
+            Connect Wallet
+          </Link>
+        </div>
       </div>
     </header>
-  )
+  );
 }
