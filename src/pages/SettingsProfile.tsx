@@ -15,7 +15,30 @@ type Profile = {
   bio: string | null;
   avatar_url: string | null;
   cover_url: string | null;
+  website?: string | null;
+  instagram?: string | null;
+  twitter?: string | null;
 };
+
+type FormState = {
+  username: string;
+  display_name: string;
+  bio: string;
+  website: string;
+  instagram: string;
+  twitter: string;
+};
+
+function normalizeWebsite(url: string) {
+  const s = url.trim();
+  if (!s) return "";
+  if (/^https?:\/\//i.test(s)) return s;
+  return `https://${s}`;
+}
+
+function normalizeHandle(h: string) {
+  return h.replace(/^@+/, "").trim();
+}
 
 export default function SettingsProfile() {
   const { user } = useAuth();
@@ -23,7 +46,14 @@ export default function SettingsProfile() {
   const navigate = useNavigate();
 
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [form, setForm] = useState({ username: "", display_name: "", bio: "" });
+  const [form, setForm] = useState<FormState>({
+    username: "",
+    display_name: "",
+    bio: "",
+    website: "",
+    instagram: "",
+    twitter: "",
+  });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -39,7 +69,9 @@ export default function SettingsProfile() {
         await ensureProfileRow(user.id);
         const { data, error } = await supabase
           .from("profiles")
-          .select("id,username,display_name,bio,avatar_url,cover_url")
+          .select(
+            "id,username,display_name,bio,avatar_url,cover_url,website,instagram,twitter"
+          )
           .eq("id", user.id)
           .maybeSingle();
         if (error) throw error;
@@ -49,9 +81,16 @@ export default function SettingsProfile() {
           username: p?.username || "",
           display_name: p?.display_name || "",
           bio: p?.bio || "",
+          website: p?.website || "",
+          instagram: p?.instagram || "",
+          twitter: p?.twitter || "",
         });
       } catch (e: any) {
-        toast({ variant: "error", title: "Failed to load profile", description: e.message });
+        toast({
+          variant: "error",
+          title: "Failed to load profile",
+          description: e.message,
+        });
       } finally {
         setLoading(false);
       }
@@ -69,25 +108,31 @@ export default function SettingsProfile() {
 
     setSaving(true);
     try {
-      // ✅ upsert so it works whether the row exists or not
+      const payload = {
+        id: user.id,
+        username: form.username.trim() || null,
+        display_name: form.display_name.trim() || null,
+        bio: form.bio.trim() || null,
+        website: normalizeWebsite(form.website) || null,
+        instagram: normalizeHandle(form.instagram) || null,
+        twitter: normalizeHandle(form.twitter) || null,
+        updated_at: new Date().toISOString(),
+      };
+
+      // upsert so it works whether the row exists or not
       const { error } = await supabase
         .from("profiles")
-        .upsert(
-          {
-            id: user.id,
-            username: form.username.trim() || null,
-            display_name: form.display_name.trim() || null,
-            bio: form.bio.trim() || null,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "id" }
-        );
+        .upsert(payload, { onConflict: "id" });
       if (error) throw error;
 
       toast({ variant: "success", title: "Profile saved" });
       navigate("/me", { replace: true });
     } catch (err: any) {
-      toast({ variant: "error", title: "Couldn’t save", description: err.message });
+      toast({
+        variant: "error",
+        title: "Couldn’t save",
+        description: err.message,
+      });
     } finally {
       setSaving(false);
     }
@@ -114,9 +159,9 @@ export default function SettingsProfile() {
       const url = await uploadPublicBlob(bucket, user.id, cropped, ext);
       const busted = `${url}?v=${Date.now()}`; // cache-bust so UI refreshes
 
-      const patch = cropOpen.kind === "avatar" ? { avatar_url: busted } : { cover_url: busted };
+      const patch =
+        cropOpen.kind === "avatar" ? { avatar_url: busted } : { cover_url: busted };
 
-      // ✅ upsert again (in case the row didn’t exist before opening settings)
       const { error } = await supabase
         .from("profiles")
         .upsert({ id: user.id, ...patch }, { onConflict: "id" });
@@ -128,7 +173,11 @@ export default function SettingsProfile() {
         title: cropOpen.kind === "avatar" ? "Avatar updated" : "Cover updated",
       });
     } catch (err: any) {
-      toast({ variant: "error", title: "Upload failed", description: String(err.message || err) });
+      toast({
+        variant: "error",
+        title: "Upload failed",
+        description: String(err.message || err),
+      });
     } finally {
       setCropOpen(null);
     }
@@ -150,7 +199,9 @@ export default function SettingsProfile() {
           {profile?.cover_url ? (
             <img src={profile.cover_url} className="h-40 w-full object-cover" />
           ) : (
-            <div className="grid h-40 w-full place-items-center text-neutral-500">No cover</div>
+            <div className="grid h-40 w-full place-items-center text-neutral-500">
+              No cover
+            </div>
           )}
         </div>
         <button
@@ -187,7 +238,9 @@ export default function SettingsProfile() {
           <span className="mb-1 block text-sm text-neutral-300">Display name</span>
           <input
             value={form.display_name}
-            onChange={(e) => setForm((s) => ({ ...s, display_name: e.target.value }))}
+            onChange={(e) =>
+              setForm((s) => ({ ...s, display_name: e.target.value }))
+            }
             className="w-full rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2"
             placeholder="Your name"
           />
@@ -197,7 +250,9 @@ export default function SettingsProfile() {
           <span className="mb-1 block text-sm text-neutral-300">Username</span>
           <input
             value={form.username}
-            onChange={(e) => setForm((s) => ({ ...s, username: e.target.value }))}
+            onChange={(e) =>
+              setForm((s) => ({ ...s, username: e.target.value }))
+            }
             className="w-full rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2"
             placeholder="yourhandle"
           />
@@ -212,6 +267,53 @@ export default function SettingsProfile() {
             placeholder="Tell collectors about yourself…"
           />
         </label>
+
+        {/* Socials */}
+        <label className="block">
+          <span className="mb-1 block text-sm text-neutral-300">Website</span>
+          <input
+            value={form.website}
+            onChange={(e) => setForm((s) => ({ ...s, website: e.target.value }))}
+            placeholder="https://example.com"
+            className="w-full rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2"
+          />
+        </label>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1 block text-sm text-neutral-300">Instagram</span>
+            <div className="flex">
+              <span className="inline-flex items-center rounded-l-xl border border-neutral-800 bg-neutral-900 px-3 text-sm text-neutral-400">
+                @
+              </span>
+              <input
+                value={form.instagram}
+                onChange={(e) =>
+                  setForm((s) => ({ ...s, instagram: e.target.value }))
+                }
+                placeholder="handle"
+                className="w-full rounded-r-xl border border-l-0 border-neutral-800 bg-neutral-900 px-3 py-2"
+              />
+            </div>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-sm text-neutral-300">Twitter / X</span>
+            <div className="flex">
+              <span className="inline-flex items-center rounded-l-xl border border-neutral-800 bg-neutral-900 px-3 text-sm text-neutral-400">
+                @
+              </span>
+              <input
+                value={form.twitter}
+                onChange={(e) =>
+                  setForm((s) => ({ ...s, twitter: e.target.value }))
+                }
+                placeholder="handle"
+                className="w-full rounded-r-xl border border-l-0 border-neutral-800 bg-neutral-900 px-3 py-2"
+              />
+            </div>
+          </label>
+        </div>
 
         <div className="pt-2">
           <button
