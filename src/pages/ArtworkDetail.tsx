@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import LikeButton from "../components/LikeButton";
 
 type ArtworkRow = {
   id: string;
@@ -90,6 +91,9 @@ export default function ArtworkDetail() {
 
         <div className="space-y-4">
           <h1 className="text-2xl font-semibold">{art.title || "Untitled"}</h1>
+
+          {/* Like button */}
+          <LikeButton artworkId={art.id} />
 
           <div className="flex items-center gap-3">
             <img

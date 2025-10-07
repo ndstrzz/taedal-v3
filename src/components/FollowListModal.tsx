@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../state/AuthContext";
 import FollowButton from "./FollowButton";
@@ -44,6 +44,10 @@ export default function FollowListModal({
   // mutuals for the OWNER (header count)
   const [mutualsCount, setMutualsCount] = useState<number | null>(null);
 
+  // filter state
+  type Filter = "all" | "mutuals" | "following" | "followers";
+  const [filter, setFilter] = useState<Filter>("all");
+
   // infinite scroll sentinel
   const listRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -57,6 +61,7 @@ export default function FollowListModal({
     setMutualsCount(null);
     setYouFollowIds(new Set());
     setFollowsYouIds(new Set());
+    setFilter("all");
   }, [open, userId, mode]);
 
   // initial load
@@ -70,12 +75,10 @@ export default function FollowListModal({
   useEffect(() => {
     if (!open) return;
     (async () => {
-      // followers of owner
       const { data: f1 } = await supabase
         .from("follows")
         .select("follower_id")
         .eq("target_id", userId);
-      // following of owner
       const { data: f2 } = await supabase
         .from("follows")
         .select("target_id")
@@ -84,9 +87,7 @@ export default function FollowListModal({
       const followersIds = new Set((f1 || []).map((r: any) => r.follower_id as string));
       const followingIds = new Set((f2 || []).map((r: any) => r.target_id as string));
       let cnt = 0;
-      followersIds.forEach((id) => {
-        if (followingIds.has(id)) cnt++;
-      });
+      followersIds.forEach((id) => { if (followingIds.has(id)) cnt++; });
       setMutualsCount(cnt);
     })();
   }, [open, userId]);
@@ -209,26 +210,57 @@ export default function FollowListModal({
     return () => obs.disconnect();
   }, [open, hasMore, loading, loadMore]);
 
-  // composited row meta
+  // composited row meta (badges relative to the VIEWER)
   const items = useMemo(() => {
     return rows.map((u) => {
-      const youFollow = viewerId ? youFollowIds.has(u.id) : false;
-      const followsYou = viewerId ? followsYouIds.has(u.id) : false;
+      const youFollow = viewerId ? youFollowIds.has(u.id) : false;     // viewer -> user
+      const followsYou = viewerId ? followsYouIds.has(u.id) : false;   // user -> viewer
       const mutual = youFollow && followsYou;
-      const followBack = followsYou && !youFollow; // badge target
+      const followBack = followsYou && !youFollow;
       return { ...u, youFollow, followsYou, mutual, followBack };
     });
   }, [rows, viewerId, youFollowIds, followsYouIds]);
 
+  // filter counts for chip badges
+  const counts = useMemo(() => {
+    let mutuals = 0, following = 0, followers = 0;
+    for (const u of items) {
+      if (u.mutual) mutuals++;
+      if (u.youFollow) following++;
+      if (u.followsYou) followers++;
+    }
+    return { mutuals, following, followers };
+  }, [items]);
+
+  // filtered view
+  const filteredItems = useMemo(() => {
+    switch (filter) {
+      case "mutuals":   return items.filter((u) => u.mutual);
+      case "following": return items.filter((u) => u.youFollow);
+      case "followers": return items.filter((u) => u.followsYou);
+      default:          return items;
+    }
+  }, [items, filter]);
+
   if (!open) return null;
 
-  const title =
-    mode === "followers" ? "Followers" : "Following";
-
+  const title = mode === "followers" ? "Followers" : "Following";
   const emptyCTA =
     mode === "followers"
       ? `Be the first to follow${ownerUsername ? ` @${ownerUsername}` : ""}.`
       : `${ownerUsername ? `@${ownerUsername} hasn’t followed anyone yet.` : "No following yet."}`;
+
+  // skeleton row for loading
+  const SkeletonRow = () => (
+    <li className="flex items-center gap-3 px-3 py-2">
+      <div className="h-8 w-8 animate-pulse rounded-full bg-neutral-800" />
+      <div className="min-w-0 flex-1">
+        <div className="mb-1 h-3 w-32 animate-pulse rounded bg-neutral-800" />
+        <div className="h-2 w-20 animate-pulse rounded bg-neutral-800" />
+      </div>
+      <div className="h-7 w-20 animate-pulse rounded bg-neutral-800" />
+    </li>
+  );
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
@@ -251,14 +283,56 @@ export default function FollowListModal({
           </button>
         </div>
 
+        {/* Filters */}
+        <div className="flex gap-2 px-3 pt-2">
+          <button
+            className={`rounded-full border px-2 py-1 text-xs ${
+              filter === "all" ? "border-neutral-500 text-neutral-100" : "border-neutral-700 text-neutral-300 hover:bg-neutral-900"
+            }`}
+            onClick={() => setFilter("all")}
+          >
+            All
+          </button>
+          <button
+            className={`rounded-full border px-2 py-1 text-xs ${
+              filter === "mutuals" ? "border-neutral-500 text-neutral-100" : "border-neutral-700 text-neutral-300 hover:bg-neutral-900"
+            }`}
+            onClick={() => setFilter("mutuals")}
+            title="People you follow who also follow you"
+          >
+            Mutuals <span className="ml-1 text-neutral-400">({counts.mutuals})</span>
+          </button>
+          <button
+            className={`rounded-full border px-2 py-1 text-xs ${
+              filter === "following" ? "border-neutral-500 text-neutral-100" : "border-neutral-700 text-neutral-300 hover:bg-neutral-900"
+            }`}
+            onClick={() => setFilter("following")}
+            title="People you follow"
+          >
+            Following <span className="ml-1 text-neutral-400">({counts.following})</span>
+          </button>
+          <button
+            className={`rounded-full border px-2 py-1 text-xs ${
+              filter === "followers" ? "border-neutral-500 text-neutral-100" : "border-neutral-700 text-neutral-300 hover:bg-neutral-900"
+            }`}
+            onClick={() => setFilter("followers")}
+            title="People who follow you"
+          >
+            Followers <span className="ml-1 text-neutral-400">({counts.followers})</span>
+          </button>
+        </div>
+
         {/* List */}
         <div ref={listRef} className="max-h-[60vh] overflow-auto p-2">
-          {items.length === 0 && !loading && (
+          {filteredItems.length === 0 && !loading && (
             <div className="px-3 py-6 text-sm text-neutral-400">{emptyCTA}</div>
           )}
 
           <ul className="divide-y divide-neutral-800">
-            {items.map((u) => {
+            {/* Skeleton rows while loading */}
+            {loading && rows.length === 0 && Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={`sk-${i}`} />)}
+
+            {filteredItems.map((u) => {
               return (
                 <li key={u.id} className="flex items-center gap-3 px-3 py-2">
                   <button
@@ -344,10 +418,10 @@ export default function FollowListModal({
 
           {/* sentinel for infinite scroll */}
           <div ref={sentinelRef} />
-          {loading && (
+          {loading && rows.length > 0 && (
             <div className="px-3 py-3 text-center text-sm text-neutral-400">Loading…</div>
           )}
-          {!hasMore && items.length > 0 && (
+          {!hasMore && filteredItems.length > 0 && (
             <div className="px-3 py-3 text-center text-xs text-neutral-500">No more users</div>
           )}
         </div>
