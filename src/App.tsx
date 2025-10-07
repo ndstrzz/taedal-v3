@@ -5,8 +5,9 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import CreateArtwork from "./pages/CreateArtwork";
 import SettingsProfile from "./pages/SettingsProfile";
-import PublicProfile from "./routes/PublicProfile";
+import PublicProfile from "./routes/PublicProfile"; // keep your path if that's where it lives
 import MyProfile from "./pages/MyProfile";
+import ArtworkDetail from "./pages/ArtworkDetail";   // ✅ NEW
 import NavBar from "./components/NavBar";
 import { useAuth } from "./state/AuthContext";
 
@@ -17,7 +18,6 @@ function ProtectedRoute({ children }: { children: JSX.Element }) {
 
   if (loading) return <div className="p-8 text-neutral-400">Loading…</div>;
   if (!user) {
-    // bounce to login, and remember where to go back
     const next = encodeURIComponent(loc.pathname + loc.search);
     return <Navigate to={`/login?next=${next}`} replace />;
   }
@@ -44,7 +44,6 @@ export default function App() {
   return (
     <>
       <NavBar />
-
       <Routes>
         <Route path="/" element={<Home />} />
 
@@ -66,7 +65,7 @@ export default function App() {
           }
         />
 
-        {/* Create is allowed only for signed-in users */}
+        {/* Create (protected) */}
         <Route
           path="/create"
           element={
@@ -76,7 +75,7 @@ export default function App() {
           }
         />
 
-        {/* Settings (edit profile) — only reachable if signed in */}
+        {/* Settings (protected) */}
         <Route
           path="/settings"
           element={
@@ -86,7 +85,7 @@ export default function App() {
           }
         />
 
-        {/* Your own profile */}
+        {/* Your profile (protected) */}
         <Route
           path="/me"
           element={
@@ -96,8 +95,11 @@ export default function App() {
           }
         />
 
-        {/* Public profile by @handle */}
+        {/* Public profile */}
         <Route path="/@:handle" element={<PublicProfile />} />
+
+        {/* ✅ Artwork detail */}
+        <Route path="/a/:id" element={<ArtworkDetail />} />
 
         {/* Fallback */}
         <Route path="*" element={<NotFound />} />
