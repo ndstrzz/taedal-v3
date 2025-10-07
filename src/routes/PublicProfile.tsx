@@ -214,6 +214,7 @@ export default function PublicProfile() {
         <FollowListModal
           open
           userId={profile.id}
+          ownerUsername={profile.username || null}
           mode={showModal}
           onClose={() => setShowModal(null)}
         />

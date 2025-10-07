@@ -184,6 +184,7 @@ export default function MyProfile() {
         <FollowListModal
           open
           userId={profile.id}
+          ownerUsername={profile.username || null}
           mode={showModal}
           onClose={() => setShowModal(null)}
         />
