@@ -26,6 +26,28 @@ function fmtMB(bytes: number) {
   return (bytes / (1024 * 1024)).toFixed(1) + "MB";
 }
 
+// Downscale images client-side so /api/verify stays under serverless body limits
+async function downscaleForVerify(srcFile: File, maxSide = 1024): Promise<Blob> {
+  if (!srcFile.type.startsWith("image/")) return srcFile; // leave videos alone
+  const bitmap = await createImageBitmap(srcFile);
+  const longest = Math.max(bitmap.width, bitmap.height);
+  const scale = Math.min(1, maxSide / longest);
+  const w = Math.round(bitmap.width * scale);
+  const h = Math.round(bitmap.height * scale);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(bitmap, 0, 0, w, h);
+
+  // JPEG @ 0.8 ~ good balance; server reads it fine for hashing/perceptual work
+  const blob: Blob = await new Promise((res) =>
+    canvas.toBlob((b) => res(b || srcFile), "image/jpeg", 0.8)
+  );
+  return blob;
+}
+
 export default function CreateArtwork() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -123,7 +145,7 @@ export default function CreateArtwork() {
     [handleNewFile]
   );
 
-  // Auto similarity check — send field name "artwork"
+  // Auto similarity check — robust: downscale + send both field names
   useEffect(() => {
     if (!file) return;
     if (!API_BASE) {
@@ -138,16 +160,29 @@ export default function CreateArtwork() {
       setChecking(true);
       setCandidates(null);
       try {
+        const blob = await downscaleForVerify(file, 1024);
+        const smallFile = new File([blob], file.name, { type: blob.type || file.type });
+
         const fd = new FormData();
-        fd.append("artwork", file); // IMPORTANT
+        // Send BOTH names: whichever the server expects, it will find one.
+        fd.append("artwork", smallFile);
+        fd.append("file", smallFile);
+
         const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/verify`, {
           method: "POST",
           body: fd,
+          headers: { Accept: "application/json" },
         });
-        if (!r.ok) throw new Error(`Similarity check failed (${r.status})`);
+
+        if (!r.ok) {
+          const text = await r.text().catch(() => "");
+          throw new Error(`Similarity check failed (${r.status}) ${text}`.trim());
+        }
+
         const out = (await r.json()) as { similar?: SimilarRecord[]; matches?: SimilarRecord[] };
         const results = Array.isArray(out?.similar) ? out.similar : (out?.matches || []);
         setCandidates(results);
+
         if (results.length > 0) {
           toast({
             title: "Possible matches found",
@@ -160,7 +195,7 @@ export default function CreateArtwork() {
         toast({
           variant: "error",
           title: "Similarity check error",
-          description: String(err.message || err),
+          description: String(err?.message || err),
         });
         setCandidates([]); // allow continue
       } finally {
@@ -392,10 +427,7 @@ export default function CreateArtwork() {
             <div className="mt-2">
               <div className="mb-1 text-xs text-neutral-400">Uploading & preparing…</div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-800">
-                <div
-                  className="h-full bg-white transition-all"
-                  style={{ width: `${progress}%` }}
-                />
+                <div className="h-full bg-white transition-all" style={{ width: `${progress}%` }} />
               </div>
             </div>
           )}
