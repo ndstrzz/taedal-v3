@@ -3,9 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useToast } from "../components/Toaster";
 import { useAuth } from "../state/AuthContext";
-// add import
 import FollowButton from "../components/FollowButton";
-
+import FollowListModal from "../components/FollowListModal";
 
 type Profile = {
   id: string;
@@ -37,7 +36,6 @@ export default function PublicProfile() {
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-
   const [counts, setCounts] = useState<Counts>({ posts: 0, followers: 0, following: 0 });
 
   const [artworks, setArtworks] = useState<Artwork[]>([]);
@@ -45,8 +43,7 @@ export default function PublicProfile() {
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const [isFollowing, setIsFollowing] = useState<boolean>(false);
-  const [followBusy, setFollowBusy] = useState(false);
+  const [showModal, setShowModal] = useState<null | "followers" | "following">(null);
 
   // Load profile by @username
   useEffect(() => {
@@ -73,7 +70,7 @@ export default function PublicProfile() {
     };
   }, [username]);
 
-  // Counts from the view
+  // Counts
   useEffect(() => {
     if (!profile) return;
     (async () => {
@@ -89,72 +86,6 @@ export default function PublicProfile() {
       });
     })();
   }, [profile]);
-
-  // Initial follow state
-  useEffect(() => {
-    if (!user || !profile || user.id === profile.id) {
-      setIsFollowing(false);
-      return;
-    }
-    (async () => {
-      const { count } = await supabase
-        .from("follows")
-        .select("follower_id", { count: "exact", head: true })
-        .eq("follower_id", user.id)
-        .eq("target_id", profile.id);
-      setIsFollowing((count ?? 0) > 0);
-    })();
-  }, [user, profile]);
-
-  // Toggle follow/unfollow
-  async function toggleFollow() {
-    if (!user || !profile || user.id === profile.id || followBusy) return;
-    setFollowBusy(true);
-
-    const prevFollowing = isFollowing;
-    // optimistic bump
-    setIsFollowing(!prevFollowing);
-    setCounts((c) => ({ ...c, followers: c.followers + (prevFollowing ? -1 : 1) }));
-
-    try {
-      if (prevFollowing) {
-        const { error } = await supabase
-          .from("follows")
-          .delete()
-          .eq("follower_id", user.id)
-          .eq("target_id", profile.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from("follows")
-          .insert({ follower_id: user.id, target_id: profile.id });
-        if (error) throw error;
-      }
-
-      // sanity refresh from the view
-      const { data } = await supabase
-        .from("profile_counts")
-        .select("posts,followers,following")
-        .eq("user_id", profile.id)
-        .maybeSingle();
-      setCounts({
-        posts: data?.posts ?? 0,
-        followers: data?.followers ?? 0,
-        following: data?.following ?? 0,
-      });
-    } catch (e: any) {
-      // undo optimistic on error
-      setIsFollowing(prevFollowing);
-      setCounts((c) => ({ ...c, followers: c.followers + (prevFollowing ? 1 : -1) }));
-      toast({
-        variant: "error",
-        title: "Follow action failed",
-        description: e?.message || String(e),
-      });
-    } finally {
-      setFollowBusy(false);
-    }
-  }
 
   // Artworks pagination
   async function loadMore() {
@@ -183,7 +114,6 @@ export default function PublicProfile() {
     setHasMore(from + rows.length < total);
   }
 
-  // Reset grid on profile change & grab first page
   useEffect(() => {
     setArtworks([]);
     setPage(0);
@@ -243,25 +173,23 @@ export default function PublicProfile() {
           </div>
 
           {showFollow && (
-  <FollowButton
-    targetId={profile.id}
-    onToggled={async () => {
-      // refresh counts from the view after each toggle
-      const { data } = await supabase
-        .from("profile_counts")
-        .select("posts,followers,following")
-        .eq("user_id", profile.id)
-        .maybeSingle();
-      setCounts({
-        posts: data?.posts ?? 0,
-        followers: data?.followers ?? 0,
-        following: data?.following ?? 0,
-      });
-    }}
-    className="mb-2"
-  />
-)}
-
+            <FollowButton
+              targetId={profile.id}
+              onToggled={async () => {
+                const { data } = await supabase
+                  .from("profile_counts")
+                  .select("posts,followers,following")
+                  .eq("user_id", profile.id)
+                  .maybeSingle();
+                setCounts({
+                  posts: data?.posts ?? 0,
+                  followers: data?.followers ?? 0,
+                  following: data?.following ?? 0,
+                });
+              }}
+              className="mb-2"
+            />
+          )}
         </div>
 
         {/* Stats */}
@@ -269,14 +197,24 @@ export default function PublicProfile() {
           <div>
             <span className="font-semibold">{counts.posts}</span> posts
           </div>
-          <div>
+          <button className="text-left hover:underline" onClick={() => setShowModal("followers")}>
             <span className="font-semibold">{counts.followers}</span> followers
-          </div>
-          <div>
+          </button>
+          <button className="text-left hover:underline" onClick={() => setShowModal("following")}>
             <span className="font-semibold">{counts.following}</span> following
-          </div>
+          </button>
         </div>
       </div>
+
+      {/* Modal */}
+      {profile && showModal && (
+        <FollowListModal
+          open
+          userId={profile.id}
+          mode={showModal}
+          onClose={() => setShowModal(null)}
+        />
+      )}
 
       {/* Artworks grid */}
       <div className="mx-auto max-w-6xl px-4 py-8">

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../state/AuthContext";
 import { supabase } from "../lib/supabase";
 import { ensureProfileRow } from "../lib/profile";
+import FollowListModal from "../components/FollowListModal";
 
 type Profile = {
   id: string;
@@ -37,6 +38,8 @@ export default function MyProfile() {
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+
+  const [showModal, setShowModal] = useState<null | "followers" | "following">(null);
 
   // Ensure row exists, then load it
   useEffect(() => {
@@ -147,6 +150,9 @@ export default function MyProfile() {
             alt={displayName}
             className="h-24 w-24 rounded-full border-4 border-neutral-950 object-cover"
           />
+        </div>
+
+        <div className="flex items-end gap-4">
           <div className="flex-1 pb-2">
             <div className="text-2xl font-semibold">{displayName}</div>
             {profile.username && <div className="text-sm text-neutral-400">@{profile.username}</div>}
@@ -164,10 +170,24 @@ export default function MyProfile() {
         {/* Stats */}
         <div className="mt-6 flex gap-6 text-sm">
           <div><span className="font-semibold">{counts.posts}</span> posts</div>
-          <div><span className="font-semibold">{counts.followers}</span> followers</div>
-          <div><span className="font-semibold">{counts.following}</span> following</div>
+          <button className="text-left hover:underline" onClick={() => setShowModal("followers")}>
+            <span className="font-semibold">{counts.followers}</span> followers
+          </button>
+          <button className="text-left hover:underline" onClick={() => setShowModal("following")}>
+            <span className="font-semibold">{counts.following}</span> following
+          </button>
         </div>
       </div>
+
+      {/* Modal */}
+      {profile && showModal && (
+        <FollowListModal
+          open
+          userId={profile.id}
+          mode={showModal}
+          onClose={() => setShowModal(null)}
+        />
+      )}
 
       {/* Artworks */}
       <div className="mx-auto max-w-6xl px-4 py-8">
