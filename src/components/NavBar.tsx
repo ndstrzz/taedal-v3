@@ -90,7 +90,7 @@ export default function NavBar() {
     if (!u) return;
     setOpen(false);
     setQ("");
-    navigate(`/u/${encodeURIComponent(u)}`); // 👈 use the alias route
+    navigate(`/u/${encodeURIComponent(u)}`); // use /u/ route
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {

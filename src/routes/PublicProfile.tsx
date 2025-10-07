@@ -1,4 +1,3 @@
-// src/pages/PublicProfile.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
@@ -30,9 +29,10 @@ const PAGE_SIZE = 12;
 const ipfs = (cid?: string | null) => (cid ? `https://ipfs.io/ipfs/${cid}` : "");
 
 export default function PublicProfile() {
-  // URL is /u/:username
-  const { username: usernameParam = "" } = useParams();
-  const username = (usernameParam || "").replace(/^@/, ""); // tolerate @user links
+  // Accept either /u/:username OR /@:handle (both routed here)
+  const params = useParams();
+  const username = ((params.username as string) || (params.handle as string) || "").replace(/^@/, "");
+
   const { toast } = useToast();
   const { user } = useAuth();
 
@@ -47,7 +47,7 @@ export default function PublicProfile() {
 
   const [showModal, setShowModal] = useState<null | "followers" | "following">(null);
 
-  // Load profile by @username
+  // Load profile by username
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -116,6 +116,7 @@ export default function PublicProfile() {
     setHasMore(from + rows.length < total);
   }
 
+  // Reset on profile change
   useEffect(() => {
     setArtworks([]);
     setPage(0);
@@ -162,7 +163,7 @@ export default function PublicProfile() {
 
       {/* Header */}
       <div className="mx-auto -mt-12 max-w-6xl px-4">
-        <div className="flex items.end gap-4">
+        <div className="flex items-end gap-4">
           <img
             src={profile.avatar_url || "/brand/taedal-logo.svg"}
             alt={displayName}
