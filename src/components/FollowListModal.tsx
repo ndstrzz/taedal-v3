@@ -4,10 +4,25 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../state/AuthContext";
 import FollowButton from "./FollowButton";
 
+/** ---------- small inline helpers (no new files) ---------- */
+function encodeCursor(obj: Record<string, any>): string {
+  return btoa(JSON.stringify(obj));
+}
+function decodeCursor<T = any>(cur?: string | null): T | null {
+  if (!cur) return null;
+  try { return JSON.parse(atob(cur)); } catch { return null; }
+}
+async function fetchBlockedIds(viewerId?: string | null): Promise<Set<string>> {
+  if (!viewerId) return new Set();
+  const { data } = await supabase.from("blocks").select("blocked").eq("blocker", viewerId);
+  return new Set((data || []).map((r: any) => r.blocked as string));
+}
+/** -------------------------------------------------------- */
+
 type Props = {
   open: boolean;
-  userId: string;                 // profile owner whose list we’re viewing
-  ownerUsername?: string | null;  // for empty-state CTA (optional)
+  userId: string;                 // whose list we’re viewing
+  ownerUsername?: string | null;  // for empty-state CTA
   mode: "followers" | "following";
   onClose: () => void;
 };
@@ -17,6 +32,7 @@ type Row = {
   username: string | null;
   display_name: string | null;
   avatar_url: string | null;
+  created_at?: string | null; // from follows for keyset
 };
 
 const PAGE = 24;
@@ -32,185 +48,161 @@ export default function FollowListModal({
   const viewerId = user?.id || null;
   const navigate = useNavigate();
 
+  // data
   const [rows, setRows] = useState<Row[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [page, setPage] = useState(0);
+  const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
+  const [loading, setLoading] = useState(false);
 
-  // cross-info (for badges)
+  // header mutuals (followers ∩ following of OWNER)
+  const [mutualsCount, setMutualsCount] = useState<number | null>(null);
+
+  // viewer-relative edges for badges
   const [youFollowIds, setYouFollowIds] = useState<Set<string>>(new Set());
   const [followsYouIds, setFollowsYouIds] = useState<Set<string>>(new Set());
 
-  // mutuals for the OWNER (header count)
-  const [mutualsCount, setMutualsCount] = useState<number | null>(null);
+  // viewer blocks
+  const [blocked, setBlocked] = useState<Set<string>>(new Set());
 
-  // filter state
+  // filters
   type Filter = "all" | "mutuals" | "following" | "followers";
   const [filter, setFilter] = useState<Filter>("all");
 
-  // infinite scroll sentinel
+  // scrolling
   const listRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-  // reset when opened or inputs change
+  /** ---------- resets when opened / inputs change ---------- */
   useEffect(() => {
     if (!open) return;
     setRows([]);
-    setPage(0);
+    setCursor(null);
     setHasMore(true);
-    setMutualsCount(null);
+    setLoading(false);
     setYouFollowIds(new Set());
     setFollowsYouIds(new Set());
     setFilter("all");
+    setMutualsCount(null);
   }, [open, userId, mode]);
 
-  // initial load
+  /** viewer blocked ids */
   useEffect(() => {
-    if (!open) return;
-    void loadMore();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+    let alive = true;
+    (async () => {
+      const b = await fetchBlockedIds(viewerId);
+      if (alive) setBlocked(b);
+    })();
+    return () => { alive = false; };
+  }, [viewerId]);
 
-  // fetch owner mutuals count (followers ∩ following of the OWNER)
+  /** mutuals header count (owner’s followers ∩ following) */
   useEffect(() => {
     if (!open) return;
     (async () => {
-      const { data: f1 } = await supabase
-        .from("follows")
-        .select("follower_id")
-        .eq("target_id", userId);
-      const { data: f2 } = await supabase
-        .from("follows")
-        .select("target_id")
-        .eq("follower_id", userId);
-
-      const followersIds = new Set((f1 || []).map((r: any) => r.follower_id as string));
-      const followingIds = new Set((f2 || []).map((r: any) => r.target_id as string));
+      const [{ data: f1 }, { data: f2 }] = await Promise.all([
+        supabase.from("follows").select("follower_id").eq("target_id", userId),
+        supabase.from("follows").select("target_id").eq("follower_id", userId),
+      ]);
+      const followers = new Set((f1 || []).map((r: any) => r.follower_id as string));
+      const following = new Set((f2 || []).map((r: any) => r.target_id as string));
       let cnt = 0;
-      followersIds.forEach((id) => { if (followingIds.has(id)) cnt++; });
+      followers.forEach((id) => { if (following.has(id)) cnt++; });
       setMutualsCount(cnt);
     })();
   }, [open, userId]);
 
-  // helper to fetch a page (from view, then fallback)
-  const fetchPage = useCallback(
-    async (from: number, to: number) => {
-      const viewName = mode === "followers" ? "followers_list" : "following_list";
+  /** keyset page loader */
+  const loadMore = useCallback(async () => {
+    if (!open || loading || !hasMore) return;
+    setLoading(true);
 
-      // try view first
-      const { data, error, count } = await supabase
-        .from(viewName)
-        .select("id,username,display_name,avatar_url", { count: "exact" })
-        .eq("user_id", userId)
-        .range(from, to);
+    try {
+      const idCol = mode === "followers" ? "follower_id" : "target_id";
+      const whereCol = mode === "followers" ? "target_id" : "follower_id";
 
-      if (!error && data) {
-        return {
-          batch: data as Row[],
-          total: typeof count === "number" ? count : undefined,
-        };
-      }
+      const cur = decodeCursor<{ created_at: string; id: string }>(cursor);
 
-      // fallback: core tables
-      const idColumn = mode === "followers" ? "follower_id" : "target_id";
-      const whereColumn = mode === "followers" ? "target_id" : "follower_id";
-
-      const { data: idRows } = await supabase
+      // Build keyset query over (created_at desc, id desc).
+      // Supabase doesn’t support tuple comparisons directly; emulate:
+      let q = supabase
         .from("follows")
-        .select(idColumn)
-        .eq(whereColumn, userId);
+        .select(`${idCol}, created_at`)
+        .eq(whereCol, userId)
+        .order("created_at", { ascending: false })
+        .order(idCol, { ascending: false })
+        .limit(PAGE + 1);
 
-      const ids = (idRows || []).map((r: any) => r[idColumn]) as string[];
-      const slice = ids.slice(from, to + 1);
-      if (slice.length === 0) {
-        return { batch: [] as Row[], total: ids.length };
+      if (cur?.created_at && cur?.id) {
+        // created_at < cur.created_at OR (created_at = cur.created_at AND id < cur.id)
+        q = q.or(
+          `created_at.lt.${cur.created_at},and(created_at.eq.${cur.created_at},${idCol}.lt.${cur.id})`
+        );
       }
+
+      const { data: fids, error } = await q;
+      if (error) throw error;
+
+      const items = (fids || []).slice(0, PAGE) as any[];
+      setHasMore((fids || []).length > PAGE);
+      if (items.length === 0) { setLoading(false); return; }
+
+      const ids = items.map((r) => r[idCol] as string).filter((id) => !blocked.has(id));
+      if (ids.length === 0) { setLoading(false); return; }
+
       const { data: users } = await supabase
         .from("profiles")
         .select("id,username,display_name,avatar_url")
-        .in("id", slice);
+        .in("id", ids);
 
-      return {
-        batch: ((users || []) as Row[]).sort((a, b) =>
-          (a.username || "").localeCompare(b.username || "")
-        ),
-        total: ids.length,
-      };
-    },
-    [mode, userId]
-  );
+      const createdMap = new Map(ids.map((id, i) => [id, items[i].created_at]));
+      const batch: Row[] = (users || []).map((u: any) => ({
+        ...u,
+        created_at: createdMap.get(u.id) || null,
+      }));
 
-  // load a page & enrich with follow badges
-  const loadMore = useCallback(async () => {
-    if (loading || !hasMore) return;
-    setLoading(true);
-
-    const from = page * PAGE;
-    const to = from + PAGE - 1;
-
-    try {
-      const { batch, total } = await fetchPage(from, to);
-
-      // update rows/pagination
-      setRows((r) => [...r, ...batch]);
-      setPage((p) => p + 1);
-      const effectiveTotal = total ?? from + batch.length;
-      setHasMore(from + batch.length < effectiveTotal);
-
-      // if we have a viewer, pull follow edges to decorate
-      if (viewerId && batch.length > 0) {
-        const ids = batch.map((b) => b.id);
-
-        // youFollow: viewer -> ids
-        const { data: youFollow } = await supabase
-          .from("follows")
-          .select("target_id")
-          .eq("follower_id", viewerId)
-          .in("target_id", ids);
-
-        // followsYou: ids -> viewer
-        const { data: theyFollow } = await supabase
-          .from("follows")
-          .select("follower_id")
-          .eq("target_id", viewerId)
-          .in("follower_id", ids);
-
+      // decorate viewer-relative edges for badges
+      if (viewerId && batch.length) {
+        const [{ data: youF }, { data: theyF }] = await Promise.all([
+          supabase.from("follows").select("target_id").eq("follower_id", viewerId).in("target_id", ids),
+          supabase.from("follows").select("follower_id").eq("target_id", viewerId).in("follower_id", ids),
+        ]);
         setYouFollowIds((prev) => {
-          const next = new Set(prev);
-          (youFollow || []).forEach((r: any) => next.add(r.target_id as string));
-          return next;
+          const n = new Set(prev);
+          (youF || []).forEach((r: any) => n.add(r.target_id));
+          return n;
         });
         setFollowsYouIds((prev) => {
-          const next = new Set(prev);
-          (theyFollow || []).forEach((r: any) => next.add(r.follower_id as string));
-          return next;
+          const n = new Set(prev);
+          (theyF || []).forEach((r: any) => n.add(r.follower_id));
+          return n;
         });
       }
+
+      setRows((r) => [...r, ...batch]);
+
+      const last = items[items.length - 1];
+      setCursor(encodeCursor({ created_at: last.created_at, id: last[idCol] as string }));
     } finally {
       setLoading(false);
     }
-  }, [fetchPage, hasMore, loading, page, viewerId]);
+  }, [open, loading, hasMore, cursor, mode, userId, viewerId, blocked]);
 
-  // infinite scroll using IntersectionObserver
+  /** initial load + infinite scroll */
+  useEffect(() => { if (open) void loadMore(); }, [open, loadMore]);
+
   useEffect(() => {
     if (!open) return;
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
-
     const obs = new IntersectionObserver(
-      (entries) => {
-        const e = entries[0];
-        if (e.isIntersecting && hasMore && !loading) {
-          void loadMore();
-        }
-      },
+      (ents) => { if (ents[0].isIntersecting && hasMore && !loading) void loadMore(); },
       { root: listRef.current, rootMargin: "200px" }
     );
     obs.observe(sentinel);
     return () => obs.disconnect();
   }, [open, hasMore, loading, loadMore]);
 
-  // composited row meta (badges relative to the VIEWER)
+  /** viewer-relative badges + filter counts */
   const items = useMemo(() => {
     return rows.map((u) => {
       const youFollow = viewerId ? youFollowIds.has(u.id) : false;     // viewer -> user
@@ -221,18 +213,16 @@ export default function FollowListModal({
     });
   }, [rows, viewerId, youFollowIds, followsYouIds]);
 
-  // filter counts for chip badges
   const counts = useMemo(() => {
     let mutuals = 0, following = 0, followers = 0;
     for (const u of items) {
-      if (u.mutual) mutuals++;
+      if (u.mutual)    mutuals++;
       if (u.youFollow) following++;
       if (u.followsYou) followers++;
     }
     return { mutuals, following, followers };
   }, [items]);
 
-  // filtered view
   const filteredItems = useMemo(() => {
     switch (filter) {
       case "mutuals":   return items.filter((u) => u.mutual);
@@ -250,7 +240,6 @@ export default function FollowListModal({
       ? `Be the first to follow${ownerUsername ? ` @${ownerUsername}` : ""}.`
       : `${ownerUsername ? `@${ownerUsername} hasn’t followed anyone yet.` : "No following yet."}`;
 
-  // skeleton row for loading
   const SkeletonRow = () => (
     <li className="flex items-center gap-3 px-3 py-2">
       <div className="h-8 w-8 animate-pulse rounded-full bg-neutral-800" />
@@ -275,51 +264,34 @@ export default function FollowListModal({
               </span>
             )}
           </div>
-          <button
-            onClick={onClose}
-            className="rounded-lg border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900"
-          >
+          <button onClick={onClose} className="rounded-lg border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900">
             Close
           </button>
         </div>
 
         {/* Filters */}
         <div className="flex gap-2 px-3 pt-2">
-          <button
-            className={`rounded-full border px-2 py-1 text-xs ${
-              filter === "all" ? "border-neutral-500 text-neutral-100" : "border-neutral-700 text-neutral-300 hover:bg-neutral-900"
-            }`}
-            onClick={() => setFilter("all")}
-          >
-            All
-          </button>
-          <button
-            className={`rounded-full border px-2 py-1 text-xs ${
-              filter === "mutuals" ? "border-neutral-500 text-neutral-100" : "border-neutral-700 text-neutral-300 hover:bg-neutral-900"
-            }`}
-            onClick={() => setFilter("mutuals")}
-            title="People you follow who also follow you"
-          >
-            Mutuals <span className="ml-1 text-neutral-400">({counts.mutuals})</span>
-          </button>
-          <button
-            className={`rounded-full border px-2 py-1 text-xs ${
-              filter === "following" ? "border-neutral-500 text-neutral-100" : "border-neutral-700 text-neutral-300 hover:bg-neutral-900"
-            }`}
-            onClick={() => setFilter("following")}
-            title="People you follow"
-          >
-            Following <span className="ml-1 text-neutral-400">({counts.following})</span>
-          </button>
-          <button
-            className={`rounded-full border px-2 py-1 text-xs ${
-              filter === "followers" ? "border-neutral-500 text-neutral-100" : "border-neutral-700 text-neutral-300 hover:bg-neutral-900"
-            }`}
-            onClick={() => setFilter("followers")}
-            title="People who follow you"
-          >
-            Followers <span className="ml-1 text-neutral-400">({counts.followers})</span>
-          </button>
+          {(["all","mutuals","following","followers"] as const).map((f) => (
+            <button
+              key={f}
+              className={`rounded-full border px-2 py-1 text-xs ${
+                filter === f ? "border-neutral-500 text-neutral-100" : "border-neutral-700 text-neutral-300 hover:bg-neutral-900"
+              }`}
+              onClick={() => setFilter(f)}
+              title={
+                f === "mutuals" ? "People you follow who also follow you" :
+                f === "following" ? "People you follow" :
+                f === "followers" ? "People who follow you" : undefined
+              }
+            >
+              {f[0].toUpperCase() + f.slice(1)}
+              {f !== "all" && (
+                <span className="ml-1 text-neutral-400">
+                  ({f === "mutuals" ? counts.mutuals : f === "following" ? counts.following : counts.followers})
+                </span>
+              )}
+            </button>
+          ))}
         </div>
 
         {/* List */}
@@ -329,104 +301,64 @@ export default function FollowListModal({
           )}
 
           <ul className="divide-y divide-neutral-800">
-            {/* Skeleton rows while loading */}
             {loading && rows.length === 0 && Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={`sk-${i}`} />)}
 
-            {filteredItems.map((u) => {
-              return (
-                <li key={u.id} className="flex items-center gap-3 px-3 py-2">
-                  <button
-                    onClick={() => {
-                      if (u.username) {
-                        onClose();
-                        navigate(`/u/${encodeURIComponent(u.username)}`);
-                      }
-                    }}
-                    className="flex items-center gap-3"
-                    aria-label={u.username ? `Open @${u.username}` : "Open user"}
-                  >
-                    <img
-                      src={u.avatar_url || "/brand/taedal-logo.svg"}
-                      className="h-8 w-8 rounded-full object-cover"
-                      alt=""
-                      loading="lazy"
-                    />
-                    <div className="min-w-0">
-                      <div className="truncate text-sm">
-                        {u.display_name || (u.username ? `@${u.username}` : "User")}
-                      </div>
-                      {u.username && (
-                        <div className="truncate text-xs text-neutral-400">@{u.username}</div>
-                      )}
+            {filteredItems.map((u) => (
+              <li key={u.id} className="flex items-center gap-3 px-3 py-2">
+                <button
+                  onClick={() => {
+                    if (u.username) {
+                      onClose();
+                      navigate(`/u/${encodeURIComponent(u.username)}`);
+                    }
+                  }}
+                  className="flex items-center gap-3"
+                  aria-label={u.username ? `Open @${u.username}` : "Open user"}
+                >
+                  <img
+                    src={u.avatar_url || "/brand/taedal-logo.svg"}
+                    className="h-8 w-8 rounded-full object-cover"
+                    alt=""
+                    loading="lazy"
+                  />
+                  <div className="min-w-0">
+                    <div className="truncate text-sm">
+                      {u.display_name || (u.username ? `@${u.username}` : "User")}
                     </div>
-                  </button>
-
-                  <div className="ml-auto flex items-center gap-2">
-                    {/* Badges */}
-                    {u.mutual && (
-                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-200">
-                        Mutual
-                      </span>
-                    )}
-                    {!u.mutual && u.followsYou && (
-                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-200">
-                        Follows you
-                      </span>
-                    )}
-                    {u.followBack && viewerId && viewerId !== u.id && (
-                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-200">
-                        Follow back
-                      </span>
-                    )}
-
-                    {/* Inline follow button (only if signed in & not yourself) */}
-                    {viewerId && viewerId !== u.id && (
-                      <FollowButton
-                        targetId={u.id}
-                        onToggled={() => {
-                          // Recompute badges for that user by refetching edges for just this id
-                          (async () => {
-                            const id = u.id;
-                            const [{ data: yf }, { data: fy }] = await Promise.all([
-                              supabase
-                                .from("follows")
-                                .select("target_id")
-                                .eq("follower_id", viewerId)
-                                .eq("target_id", id),
-                              supabase
-                                .from("follows")
-                                .select("follower_id")
-                                .eq("target_id", viewerId)
-                                .eq("follower_id", id),
-                            ]);
-                            setYouFollowIds((prev) => {
-                              const n = new Set(prev);
-                              yf && yf.length ? n.add(id) : n.delete(id);
-                              return n;
-                            });
-                            setFollowsYouIds((prev) => {
-                              const n = new Set(prev);
-                              fy && fy.length ? n.add(id) : n.delete(id);
-                              return n;
-                            });
-                          })();
-                        }}
-                      />
-                    )}
+                    {u.username && <div className="truncate text-xs text-neutral-400">@{u.username}</div>}
                   </div>
-                </li>
-              );
-            })}
+                </button>
+
+                <div className="ml-auto flex items-center gap-2">
+                  {u.mutual && <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-200">Mutual</span>}
+                  {!u.mutual && u.followsYou && <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-200">Follows you</span>}
+                  {u.followBack && viewerId && viewerId !== u.id && (
+                    <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-200">Follow back</span>
+                  )}
+
+                  {viewerId && viewerId !== u.id && (
+                    <FollowButton
+                      targetId={u.id}
+                      onToggled={async () => {
+                        // refresh just this user’s edges
+                        const id = u.id;
+                        const [{ data: yf }, { data: fy }] = await Promise.all([
+                          supabase.from("follows").select("target_id").eq("follower_id", viewerId).eq("target_id", id),
+                          supabase.from("follows").select("follower_id").eq("target_id", viewerId).eq("follower_id", id),
+                        ]);
+                        setYouFollowIds((prev) => { const n = new Set(prev); yf && yf.length ? n.add(id) : n.delete(id); return n; });
+                        setFollowsYouIds((prev) => { const n = new Set(prev); fy && fy.length ? n.add(id) : n.delete(id); return n; });
+                      }}
+                    />
+                  )}
+                </div>
+              </li>
+            ))}
           </ul>
 
-          {/* sentinel for infinite scroll */}
           <div ref={sentinelRef} />
-          {loading && rows.length > 0 && (
-            <div className="px-3 py-3 text-center text-sm text-neutral-400">Loading…</div>
-          )}
-          {!hasMore && filteredItems.length > 0 && (
-            <div className="px-3 py-3 text-center text-xs text-neutral-500">No more users</div>
-          )}
+          {loading && rows.length > 0 && <div className="px-3 py-3 text-center text-sm text-neutral-400">Loading…</div>}
+          {!hasMore && filteredItems.length > 0 && <div className="px-3 py-3 text-center text-xs text-neutral-500">No more users</div>}
         </div>
       </div>
     </div>

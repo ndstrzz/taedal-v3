@@ -4,7 +4,6 @@ import { supabase } from "../lib/supabase";
 import { updateSEO } from "../lib/seo";
 
 /* ---------- helpers ---------- */
-
 function toGateway(u?: string | null) {
   if (!u) return "";
   if (u.startsWith("ipfs://")) return `https://ipfs.io/ipfs/${u.slice(7)}`;
@@ -38,7 +37,6 @@ type NftMetadata = {
   image?: string;
   name?: string;
   description?: string;
-  // allow unknown extra fields
   [k: string]: any;
 };
 
@@ -48,10 +46,9 @@ export default function ArtworkDetail() {
   const [art, setArt] = useState<ArtworkRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-
   const [meta, setMeta] = useState<NftMetadata | null>(null);
 
-  /* load artwork */
+  // load artwork
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -69,66 +66,40 @@ export default function ArtworkDetail() {
       if (cancelled) return;
       setLoading(false);
 
-      if (error) {
-        setErr(error.message);
-        return;
-      }
-      if (!data) {
-        setErr("Not found.");
-        return;
-      }
+      if (error) { setErr(error.message); return; }
+      if (!data) { setErr("Not found."); return; }
       setArt(data as unknown as ArtworkRow);
     })();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [id]);
 
-  /* fetch metadata JSON (for image fallback) */
+  // fetch metadata JSON (for image fallback)
   useEffect(() => {
-    if (!art?.metadata_url) {
-      setMeta(null);
-      return;
-    }
-
+    if (!art?.metadata_url) { setMeta(null); return; }
     const url = toGateway(art.metadata_url);
     if (!url) return;
 
     let cancelled = false;
     const ac = new AbortController();
-
     (async () => {
       try {
-        // modest timeout so UI never “hangs”
         const t = setTimeout(() => ac.abort(), 8000);
         const r = await fetch(url, { signal: ac.signal });
         clearTimeout(t);
         if (!r.ok) throw new Error(String(r.status));
         const j = (await r.json()) as NftMetadata;
         if (!cancelled) setMeta(j || null);
-      } catch {
-        if (!cancelled) setMeta(null);
-      }
+      } catch { if (!cancelled) setMeta(null); }
     })();
-
-    return () => {
-      cancelled = true;
-      ac.abort();
-    };
+    return () => { cancelled = true; ac.abort(); };
   }, [art?.metadata_url]);
 
-  /* choose best image source */
+  // choose best image source
   const image = useMemo(() => {
-    return (
-      art?.cover_url ||
-      ipfsCidToHttp(art?.image_cid) ||
-      toGateway(meta?.image) ||
-      ""
-    );
+    return art?.cover_url || ipfsCidToHttp(art?.image_cid) || toGateway(meta?.image) || "";
   }, [art?.cover_url, art?.image_cid, meta?.image]);
 
-  /* SEO */
+  // SEO
   useEffect(() => {
     if (!art) return;
     const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -157,9 +128,7 @@ export default function ArtworkDetail() {
           {image ? (
             <img src={image} alt={art.title ?? ""} className="w-full object-cover" />
           ) : (
-            <div className="grid aspect-square w-full place-items-center text-neutral-500">
-              No image
-            </div>
+            <div className="grid aspect-square w-full place-items-center text-neutral-500">No image</div>
           )}
         </div>
 
@@ -174,35 +143,23 @@ export default function ArtworkDetail() {
             <div>
               <div className="text-sm text-neutral-300">{ownerName}</div>
               {art.profiles?.username && (
-                <Link
-                  to={`/@${art.profiles.username}`}
-                  className="text-xs text-neutral-400 underline"
-                >
+                <Link to={`/@${art.profiles.username}`} className="text-xs text-neutral-400 underline">
                   @{art.profiles.username}
                 </Link>
               )}
             </div>
           </div>
 
-          {art.description && (
-            <p className="whitespace-pre-line text-neutral-300">{art.description}</p>
-          )}
+          {art.description && <p className="whitespace-pre-line text-neutral-300">{art.description}</p>}
 
           <div className="space-y-1 text-sm text-neutral-400">
             {art.token_id && (
-              <div>
-                Token ID: <span className="text-neutral-200">{art.token_id}</span>
-              </div>
+              <div>Token ID: <span className="text-neutral-200">{art.token_id}</span></div>
             )}
             {art.tx_hash && (
               <div className="truncate">
                 tx:{" "}
-                <a
-                  className="underline"
-                  href={`https://sepolia.etherscan.io/tx/${art.tx_hash}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
+                <a className="underline" href={`https://sepolia.etherscan.io/tx/${art.tx_hash}`} target="_blank" rel="noreferrer">
                   {art.tx_hash}
                 </a>
               </div>
@@ -210,12 +167,7 @@ export default function ArtworkDetail() {
             {art.metadata_url && (
               <div className="truncate">
                 metadata:{" "}
-                <a
-                  className="underline"
-                  href={toGateway(art.metadata_url)}
-                  target="_blank"
-                  rel="noreferrer"
-                >
+                <a className="underline" href={toGateway(art.metadata_url)} target="_blank" rel="noreferrer">
                   {art.metadata_url}
                 </a>
               </div>
