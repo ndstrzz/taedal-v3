@@ -21,6 +21,8 @@ type Artwork = {
   created_at: string;
 };
 
+type Counts = { posts: number; followers: number; following: number };
+
 const PAGE_SIZE = 12;
 const ipfs = (cid?: string | null) => (cid ? `https://ipfs.io/ipfs/${cid}` : "");
 
@@ -33,9 +35,7 @@ export default function PublicProfile() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const [posts, setPosts] = useState(0);
-  const [followers, setFollowers] = useState(0);
-  const [following, setFollowing] = useState(0);
+  const [counts, setCounts] = useState<Counts>({ posts: 0, followers: 0, following: 0 });
 
   const [artworks, setArtworks] = useState<Artwork[]>([]);
   const [page, setPage] = useState(0);
@@ -68,30 +68,22 @@ export default function PublicProfile() {
     return () => { cancelled = true; };
   }, [username]);
 
-  // counts
+  // Counts from the view
   useEffect(() => {
     if (!profile) return;
     (async () => {
-      const [{ count: postsCount }, { count: followersCount }, { count: followingCount }] =
-        await Promise.all([
-          supabase
-            .from("artworks")
-            .select("id", { count: "exact", head: true })
-            .eq("owner", profile.id)
-            .eq("status", "published"),
-          supabase
-            .from("follows")
-            .select("follower_id", { count: "exact", head: true })
-            .eq("target_id", profile.id),
-          supabase
-            .from("follows")
-            .select("target_id", { count: "exact", head: true })
-            .eq("follower_id", profile.id),
-        ]);
+      const { data, error } = await supabase
+        .from("profile_counts")
+        .select("posts,followers,following")
+        .eq("user_id", profile.id)
+        .maybeSingle();
       if (!alive.current) return;
-      setPosts(postsCount ?? 0);
-      setFollowers(followersCount ?? 0);
-      setFollowing(followingCount ?? 0);
+      if (error) return;
+      setCounts({
+        posts: data?.posts ?? 0,
+        followers: data?.followers ?? 0,
+        following: data?.following ?? 0,
+      });
     })();
   }, [profile]);
 
@@ -99,7 +91,7 @@ export default function PublicProfile() {
     if (!profile || loadingMore || !hasMore) return;
     setLoadingMore(true);
     const from = page * PAGE_SIZE;
-    const to = from + PAGE_SIZE - 1;
+       const to = from + PAGE_SIZE - 1;
 
     const { data, error, count } = await supabase
       .from("artworks")
@@ -123,14 +115,12 @@ export default function PublicProfile() {
     setLoadingMore(false);
   }
 
-  // reset grid when profile changes
   useEffect(() => {
     setArtworks([]);
     setPage(0);
     setHasMore(true);
   }, [profile?.id]);
 
-  // first page
   useEffect(() => {
     if (profile) loadMore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -185,9 +175,9 @@ export default function PublicProfile() {
 
         {/* Stats */}
         <div className="mt-6 flex gap-6 text-sm">
-          <div><span className="font-semibold">{posts}</span> posts</div>
-          <div><span className="font-semibold">{followers}</span> followers</div>
-          <div><span className="font-semibold">{following}</span> following</div>
+          <div><span className="font-semibold">{counts.posts}</span> posts</div>
+          <div><span className="font-semibold">{counts.followers}</span> followers</div>
+          <div><span className="font-semibold">{counts.following}</span> following</div>
         </div>
       </div>
 
