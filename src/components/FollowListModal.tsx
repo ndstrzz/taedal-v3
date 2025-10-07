@@ -44,9 +44,9 @@ export default function FollowListModal({
   // mutuals for the OWNER (header count)
   const [mutualsCount, setMutualsCount] = useState<number | null>(null);
 
-  // filter state
-  type Filter = "all" | "mutuals" | "following" | "followers";
-  const [filter, setFilter] = useState<Filter>("all");
+  // a11y focus trap
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null);
 
   // infinite scroll sentinel
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -61,7 +61,6 @@ export default function FollowListModal({
     setMutualsCount(null);
     setYouFollowIds(new Set());
     setFollowsYouIds(new Set());
-    setFilter("all");
   }, [open, userId, mode]);
 
   // initial load
@@ -210,37 +209,16 @@ export default function FollowListModal({
     return () => obs.disconnect();
   }, [open, hasMore, loading, loadMore]);
 
-  // composited row meta (badges relative to the VIEWER)
+  // composited row meta relative to VIEWER
   const items = useMemo(() => {
     return rows.map((u) => {
-      const youFollow = viewerId ? youFollowIds.has(u.id) : false;     // viewer -> user
-      const followsYou = viewerId ? followsYouIds.has(u.id) : false;   // user -> viewer
+      const youFollow = viewerId ? youFollowIds.has(u.id) : false;
+      const followsYou = viewerId ? followsYouIds.has(u.id) : false;
       const mutual = youFollow && followsYou;
       const followBack = followsYou && !youFollow;
       return { ...u, youFollow, followsYou, mutual, followBack };
     });
   }, [rows, viewerId, youFollowIds, followsYouIds]);
-
-  // filter counts for chip badges
-  const counts = useMemo(() => {
-    let mutuals = 0, following = 0, followers = 0;
-    for (const u of items) {
-      if (u.mutual) mutuals++;
-      if (u.youFollow) following++;
-      if (u.followsYou) followers++;
-    }
-    return { mutuals, following, followers };
-  }, [items]);
-
-  // filtered view
-  const filteredItems = useMemo(() => {
-    switch (filter) {
-      case "mutuals":   return items.filter((u) => u.mutual);
-      case "following": return items.filter((u) => u.youFollow);
-      case "followers": return items.filter((u) => u.followsYou);
-      default:          return items;
-    }
-  }, [items, filter]);
 
   if (!open) return null;
 
@@ -250,7 +228,33 @@ export default function FollowListModal({
       ? `Be the first to follow${ownerUsername ? ` @${ownerUsername}` : ""}.`
       : `${ownerUsername ? `@${ownerUsername} hasn’t followed anyone yet.` : "No following yet."}`;
 
-  // skeleton row for loading
+  // ------- a11y: ESC + focus trap + initial focus --------
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "Tab" && dialogRef.current) {
+        const f = dialogRef.current.querySelectorAll<HTMLElement>(
+          'a,button,input,select,textarea,[tabindex]:not([tabindex="-1"])'
+        );
+        if (!f.length) return;
+        const first = f[0];
+        const last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault(); last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault(); first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    // focus the Close button on open
+    closeBtnRef.current?.focus();
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  // --------------------------------------------------------
+
+  // skeleton row
   const SkeletonRow = () => (
     <li className="flex items-center gap-3 px-3 py-2">
       <div className="h-8 w-8 animate-pulse rounded-full bg-neutral-800" />
@@ -264,11 +268,17 @@ export default function FollowListModal({
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-      <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="flm-title"
+        className="w-full max-w-lg overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950 shadow-2"
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-neutral-800 px-4 py-3">
           <div className="flex items-center gap-3">
-            <div className="text-lg font-semibold">{title}</div>
+            <div id="flm-title" className="text-lg font-semibold">{title}</div>
             {mutualsCount !== null && (
               <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-300">
                 Mutuals: {mutualsCount}
@@ -276,144 +286,100 @@ export default function FollowListModal({
             )}
           </div>
           <button
+            ref={closeBtnRef}
             onClick={onClose}
-            className="rounded-lg border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900"
+            className="rounded-lg border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900 focus:outline-none focus:ring focus:ring-brand"
           >
             Close
           </button>
         </div>
 
-        {/* Filters */}
-        <div className="flex gap-2 px-3 pt-2">
-          <button
-            className={`rounded-full border px-2 py-1 text-xs ${
-              filter === "all" ? "border-neutral-500 text-neutral-100" : "border-neutral-700 text-neutral-300 hover:bg-neutral-900"
-            }`}
-            onClick={() => setFilter("all")}
-          >
-            All
-          </button>
-          <button
-            className={`rounded-full border px-2 py-1 text-xs ${
-              filter === "mutuals" ? "border-neutral-500 text-neutral-100" : "border-neutral-700 text-neutral-300 hover:bg-neutral-900"
-            }`}
-            onClick={() => setFilter("mutuals")}
-            title="People you follow who also follow you"
-          >
-            Mutuals <span className="ml-1 text-neutral-400">({counts.mutuals})</span>
-          </button>
-          <button
-            className={`rounded-full border px-2 py-1 text-xs ${
-              filter === "following" ? "border-neutral-500 text-neutral-100" : "border-neutral-700 text-neutral-300 hover:bg-neutral-900"
-            }`}
-            onClick={() => setFilter("following")}
-            title="People you follow"
-          >
-            Following <span className="ml-1 text-neutral-400">({counts.following})</span>
-          </button>
-          <button
-            className={`rounded-full border px-2 py-1 text-xs ${
-              filter === "followers" ? "border-neutral-500 text-neutral-100" : "border-neutral-700 text-neutral-300 hover:bg-neutral-900"
-            }`}
-            onClick={() => setFilter("followers")}
-            title="People who follow you"
-          >
-            Followers <span className="ml-1 text-neutral-400">({counts.followers})</span>
-          </button>
-        </div>
-
         {/* List */}
         <div ref={listRef} className="max-h-[60vh] overflow-auto p-2">
-          {filteredItems.length === 0 && !loading && (
+          {items.length === 0 && !loading && (
             <div className="px-3 py-6 text-sm text-neutral-400">{emptyCTA}</div>
           )}
 
           <ul className="divide-y divide-neutral-800">
-            {/* Skeleton rows while loading */}
             {loading && rows.length === 0 && Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={`sk-${i}`} />)}
 
-            {filteredItems.map((u) => {
-              return (
-                <li key={u.id} className="flex items-center gap-3 px-3 py-2">
-                  <button
-                    onClick={() => {
-                      if (u.username) {
-                        onClose();
-                        navigate(`/u/${encodeURIComponent(u.username)}`);
-                      }
-                    }}
-                    className="flex items-center gap-3"
-                  >
-                    <img
-                      src={u.avatar_url || "/brand/taedal-logo.svg"}
-                      className="h-8 w-8 rounded-full object-cover"
-                    />
-                    <div className="min-w-0">
-                      <div className="truncate text-sm">
-                        {u.display_name || (u.username ? `@${u.username}` : "User")}
-                      </div>
-                      {u.username && (
-                        <div className="truncate text-xs text-neutral-400">@{u.username}</div>
-                      )}
+            {items.map((u) => (
+              <li key={u.id} className="flex items-center gap-3 px-3 py-2">
+                <button
+                  onClick={() => {
+                    if (u.username) {
+                      onClose();
+                      navigate(`/u/${encodeURIComponent(u.username)}`);
+                    }
+                  }}
+                  className="flex items-center gap-3 focus:outline-none focus:ring focus:ring-border rounded-lg"
+                >
+                  <img
+                    src={u.avatar_url || "/brand/taedal-logo.svg"}
+                    className="h-8 w-8 rounded-full object-cover"
+                    alt=""
+                  />
+                  <div className="min-w-0 text-left">
+                    <div className="truncate text-sm">
+                      {u.display_name || (u.username ? `@${u.username}` : "User")}
                     </div>
-                  </button>
-
-                  <div className="ml-auto flex items-center gap-2">
-                    {/* Badges */}
-                    {u.mutual && (
-                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-200">
-                        Mutual
-                      </span>
-                    )}
-                    {!u.mutual && u.followsYou && (
-                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-200">
-                        Follows you
-                      </span>
-                    )}
-                    {u.followBack && viewerId && viewerId !== u.id && (
-                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-200">
-                        Follow back
-                      </span>
-                    )}
-
-                    {/* Inline follow button (only if signed in & not yourself) */}
-                    {viewerId && viewerId !== u.id && (
-                      <FollowButton
-                        targetId={u.id}
-                        onToggled={() => {
-                          // Recompute badges for that user by refetching edges for just this id
-                          (async () => {
-                            const id = u.id;
-                            const [{ data: yf }, { data: fy }] = await Promise.all([
-                              supabase
-                                .from("follows")
-                                .select("target_id")
-                                .eq("follower_id", viewerId)
-                                .eq("target_id", id),
-                              supabase
-                                .from("follows")
-                                .select("follower_id")
-                                .eq("target_id", viewerId)
-                                .eq("follower_id", id),
-                            ]);
-                            setYouFollowIds((prev) => {
-                              const n = new Set(prev);
-                              yf && yf.length ? n.add(id) : n.delete(id);
-                              return n;
-                            });
-                            setFollowsYouIds((prev) => {
-                              const n = new Set(prev);
-                              fy && fy.length ? n.add(id) : n.delete(id);
-                              return n;
-                            });
-                          })();
-                        }}
-                      />
+                    {u.username && (
+                      <div className="truncate text-xs text-neutral-400">@{u.username}</div>
                     )}
                   </div>
-                </li>
-              );
-            })}
+                </button>
+
+                <div className="ml-auto flex items-center gap-2">
+                  {u.mutual && (
+                    <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-200">
+                      Mutual
+                    </span>
+                  )}
+                  {!u.mutual && u.followsYou && (
+                    <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-200">
+                      Follows you
+                    </span>
+                  )}
+                  {u.followBack && viewerId && viewerId !== u.id && (
+                    <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-200">
+                      Follow back
+                    </span>
+                  )}
+                  {viewerId && viewerId !== u.id && (
+                    <FollowButton
+                      targetId={u.id}
+                      onToggled={() => {
+                        (async () => {
+                          const id = u.id;
+                          const [{ data: yf }, { data: fy }] = await Promise.all([
+                            supabase
+                              .from("follows")
+                              .select("target_id")
+                              .eq("follower_id", viewerId)
+                              .eq("target_id", id),
+                            supabase
+                              .from("follows")
+                              .select("follower_id")
+                              .eq("target_id", viewerId)
+                              .eq("follower_id", id),
+                          ]);
+                          setYouFollowIds((prev) => {
+                            const n = new Set(prev);
+                            yf && yf.length ? n.add(id) : n.delete(id);
+                            return n;
+                          });
+                          setFollowsYouIds((prev) => {
+                            const n = new Set(prev);
+                            fy && fy.length ? n.add(id) : n.delete(id);
+                            return n;
+                          });
+                        })();
+                      }}
+                    />
+                  )}
+                </div>
+              </li>
+            ))}
           </ul>
 
           {/* sentinel for infinite scroll */}
@@ -421,7 +387,7 @@ export default function FollowListModal({
           {loading && rows.length > 0 && (
             <div className="px-3 py-3 text-center text-sm text-neutral-400">Loading…</div>
           )}
-          {!hasMore && filteredItems.length > 0 && (
+          {!hasMore && items.length > 0 && (
             <div className="px-3 py-3 text-center text-xs text-neutral-500">No more users</div>
           )}
         </div>

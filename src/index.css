@@ -49,3 +49,12 @@ body {
   .shadow-1    { box-shadow: var(--shadow-1); }
   .shadow-2    { box-shadow: var(--shadow-2); }
 }
+
+
+/* Simple 3-line clamp utility (no plugin required) */
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
