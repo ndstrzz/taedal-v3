@@ -6,6 +6,7 @@ import { supabase } from "../lib/supabase";
 import { uploadPublicBlob } from "../lib/storage";
 import CropModal from "../components/CropModal";
 import { useToast } from "../components/Toaster";
+import { ensureProfileRow } from "../lib/profile";
 
 type Profile = {
   id: string;
@@ -22,43 +23,38 @@ export default function SettingsProfile() {
   const navigate = useNavigate();
 
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [form, setForm] = useState({
-    username: "",
-    display_name: "",
-    bio: "",
-  });
+  const [form, setForm] = useState({ username: "", display_name: "", bio: "" });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const [cropOpen, setCropOpen] =
     useState<null | { kind: "avatar" | "cover"; file: File }>(null);
 
-  // Load existing profile
+  // Load (and create if missing) the profile row
   useEffect(() => {
     (async () => {
       if (!user) return;
       setLoading(true);
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("id,username,display_name,bio,avatar_url,cover_url")
-        .eq("id", user.id)
-        .maybeSingle();
-      setLoading(false);
-      if (error) {
-        toast({
-          variant: "error",
-          title: "Failed to load profile",
-          description: error.message,
+      try {
+        await ensureProfileRow(user.id);
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("id,username,display_name,bio,avatar_url,cover_url")
+          .eq("id", user.id)
+          .maybeSingle();
+        if (error) throw error;
+        const p = (data as Profile) || null;
+        setProfile(p);
+        setForm({
+          username: p?.username || "",
+          display_name: p?.display_name || "",
+          bio: p?.bio || "",
         });
-        return;
+      } catch (e: any) {
+        toast({ variant: "error", title: "Failed to load profile", description: e.message });
+      } finally {
+        setLoading(false);
       }
-      const p = (data as Profile) || null;
-      setProfile(p);
-      setForm({
-        username: p?.username || "",
-        display_name: p?.display_name || "",
-        bio: p?.bio || "",
-      });
     })();
   }, [user, toast]);
 
@@ -70,30 +66,31 @@ export default function SettingsProfile() {
   async function onSave(e: React.FormEvent) {
     e.preventDefault();
     if (!user) return;
+
     setSaving(true);
-    const { error } = await supabase
-      .from("profiles")
-      .update({
-        username: form.username.trim() || null,
-        display_name: form.display_name.trim() || null,
-        bio: form.bio.trim() || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", user.id);
-    setSaving(false);
+    try {
+      // ✅ upsert so it works whether the row exists or not
+      const { error } = await supabase
+        .from("profiles")
+        .upsert(
+          {
+            id: user.id,
+            username: form.username.trim() || null,
+            display_name: form.display_name.trim() || null,
+            bio: form.bio.trim() || null,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "id" }
+        );
+      if (error) throw error;
 
-    if (error) {
-      toast({
-        variant: "error",
-        title: "Couldn’t save",
-        description: error.message,
-      });
-      return;
+      toast({ variant: "success", title: "Profile saved" });
+      navigate("/me", { replace: true });
+    } catch (err: any) {
+      toast({ variant: "error", title: "Couldn’t save", description: err.message });
+    } finally {
+      setSaving(false);
     }
-
-    toast({ variant: "success", title: "Profile saved" });
-    // ✅ Go back to your profile page
-    navigate("/me", { replace: true });
   }
 
   function onPick(kind: "avatar" | "cover") {
@@ -108,21 +105,21 @@ export default function SettingsProfile() {
     input.click();
   }
 
-  async function onCropDone(cropped: Blob, _meta: { width: number; height: number }) {
+  async function onCropDone(cropped: Blob) {
     if (!user || !cropOpen) return;
 
     try {
-      const ext = "webp"; // CropModal exports webp/png; use a consistent ext
+      const ext = "webp";
       const bucket = cropOpen.kind === "avatar" ? "avatars" : "covers";
       const url = await uploadPublicBlob(bucket, user.id, cropped, ext);
+      const busted = `${url}?v=${Date.now()}`; // cache-bust so UI refreshes
 
-      // cache-bust to avoid stale avatars/covers
-      const busted = `${url}?v=${Date.now()}`;
+      const patch = cropOpen.kind === "avatar" ? { avatar_url: busted } : { cover_url: busted };
 
-      const patch: Record<string, any> =
-        cropOpen.kind === "avatar" ? { avatar_url: busted } : { cover_url: busted };
-
-      const { error } = await supabase.from("profiles").update(patch).eq("id", user.id);
+      // ✅ upsert again (in case the row didn’t exist before opening settings)
+      const { error } = await supabase
+        .from("profiles")
+        .upsert({ id: user.id, ...patch }, { onConflict: "id" });
       if (error) throw error;
 
       setProfile((p) => (p ? ({ ...p, ...patch } as Profile) : p));
@@ -131,11 +128,7 @@ export default function SettingsProfile() {
         title: cropOpen.kind === "avatar" ? "Avatar updated" : "Cover updated",
       });
     } catch (err: any) {
-      toast({
-        variant: "error",
-        title: "Upload failed",
-        description: String(err.message || err),
-      });
+      toast({ variant: "error", title: "Upload failed", description: String(err.message || err) });
     } finally {
       setCropOpen(null);
     }
@@ -145,9 +138,7 @@ export default function SettingsProfile() {
     setCropOpen(null);
   }
 
-  if (loading) {
-    return <div className="p-8 text-neutral-400">Loading…</div>;
-  }
+  if (loading) return <div className="p-8 text-neutral-400">Loading…</div>;
 
   return (
     <div className="mx-auto max-w-3xl p-6">
@@ -159,9 +150,7 @@ export default function SettingsProfile() {
           {profile?.cover_url ? (
             <img src={profile.cover_url} className="h-40 w-full object-cover" />
           ) : (
-            <div className="grid h-40 w-full place-items-center text-neutral-500">
-              No cover
-            </div>
+            <div className="grid h-40 w-full place-items-center text-neutral-500">No cover</div>
           )}
         </div>
         <button
@@ -234,7 +223,6 @@ export default function SettingsProfile() {
         </div>
       </form>
 
-      {/* Crop modal */}
       {cropOpen && (
         <CropModal
           file={cropOpen.file}

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../state/AuthContext";
 import { supabase } from "../lib/supabase";
+import { ensureProfileRow } from "../lib/profile";
 
 type Profile = {
   id: string;
@@ -30,33 +31,30 @@ export default function MyProfile() {
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
-
-  // counts
   const [counts, setCounts] = useState<Counts>({ posts: 0, followers: 0, following: 0 });
 
-  // artworks grid
   const [artworks, setArtworks] = useState<Artwork[]>([]);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
+  // Ensure row exists, then load it
   useEffect(() => {
     (async () => {
       if (!user) return;
+      await ensureProfileRow(user.id);
       setLoadingProfile(true);
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from("profiles")
         .select("id,username,display_name,bio,avatar_url,cover_url")
         .eq("id", user.id)
         .maybeSingle();
-
+      setProfile((data as Profile) || null);
       setLoadingProfile(false);
-      if (error || !data) return;
-      setProfile(data as Profile);
     })();
   }, [user]);
 
-  // counts via view
+  // counts via view (profile_counts)
   useEffect(() => {
     if (!profile) return;
     (async () => {
@@ -65,7 +63,6 @@ export default function MyProfile() {
         .select("posts,followers,following")
         .eq("user_id", profile.id)
         .maybeSingle();
-
       setCounts({
         posts: data?.posts ?? 0,
         followers: data?.followers ?? 0,
@@ -74,7 +71,6 @@ export default function MyProfile() {
     })();
   }, [profile]);
 
-  // grid loader
   async function loadMore() {
     if (!profile || loadingMore) return;
     setLoadingMore(true);
@@ -99,7 +95,6 @@ export default function MyProfile() {
     setHasMore(from + rows.length < total);
   }
 
-  // when profile changes, reset grid and load first page
   useEffect(() => {
     setArtworks([]);
     setPage(0);
@@ -117,16 +112,12 @@ export default function MyProfile() {
     return (
       <div className="p-8">
         <p className="mb-4 text-neutral-300">Please log in to view your profile.</p>
-        <Link to="/login" className="underline">
-          Go to log in
-        </Link>
+        <Link to="/login" className="underline">Go to log in</Link>
       </div>
     );
   }
 
-  if (loadingProfile) {
-    return <div className="p-8 text-neutral-400">Loading profile…</div>;
-  }
+  if (loadingProfile) return <div className="p-8 text-neutral-400">Loading profile…</div>;
 
   if (!profile) {
     return (
@@ -158,9 +149,7 @@ export default function MyProfile() {
           />
           <div className="flex-1 pb-2">
             <div className="text-2xl font-semibold">{displayName}</div>
-            {profile.username && (
-              <div className="text-sm text-neutral-400">@{profile.username}</div>
-            )}
+            {profile.username && <div className="text-sm text-neutral-400">@{profile.username}</div>}
             {profile.bio && <p className="mt-2 max-w-2xl text-neutral-300">{profile.bio}</p>}
           </div>
 
@@ -174,15 +163,9 @@ export default function MyProfile() {
 
         {/* Stats */}
         <div className="mt-6 flex gap-6 text-sm">
-          <div>
-            <span className="font-semibold">{counts.posts}</span> posts
-          </div>
-          <div>
-            <span className="font-semibold">{counts.followers}</span> followers
-          </div>
-          <div>
-            <span className="font-semibold">{counts.following}</span> following
-          </div>
+          <div><span className="font-semibold">{counts.posts}</span> posts</div>
+          <div><span className="font-semibold">{counts.followers}</span> followers</div>
+          <div><span className="font-semibold">{counts.following}</span> following</div>
         </div>
       </div>
 

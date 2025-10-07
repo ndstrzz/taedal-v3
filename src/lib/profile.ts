@@ -1,19 +1,14 @@
 // src/lib/profile.ts
 import { supabase } from "./supabase";
 
-/**
- * Ensure the signed-in user has a row in public.profiles.
- * Returns the profile row (may have null username).
- */
+/** Ensure a row exists in public.profiles for this user. Returns the row. */
 export async function ensureProfileRow(userId: string) {
   const { data, error } = await supabase
     .from("profiles")
     .select("*")
     .eq("id", userId)
     .maybeSingle();
-
   if (error) throw error;
-
   if (data) return data;
 
   // Create minimal placeholder profile
@@ -22,14 +17,11 @@ export async function ensureProfileRow(userId: string) {
     .insert({ id: userId })
     .select("*")
     .single();
-
   if (insErr) throw insErr;
   return ins;
 }
 
-/**
- * Fetch the profile for a user id (returns null if none).
- */
+/** Convenience fetch (returns null if missing). */
 export async function getProfileById(userId: string) {
   const { data, error } = await supabase
     .from("profiles")
@@ -40,12 +32,7 @@ export async function getProfileById(userId: string) {
   return data;
 }
 
-/**
- * After successful auth: ensure profile exists, then redirect.
- * - next provided -> next
- * - else username exists -> /@username
- * - else -> /settings
- */
+/** Decide where to send a user after auth. */
 export async function destinationAfterAuth(userId: string, next?: string | null) {
   const profile = await ensureProfileRow(userId);
   if (next) return next;
