@@ -1,3 +1,4 @@
+// src/pages/SettingsProfile.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../state/AuthContext";
@@ -29,9 +30,10 @@ export default function SettingsProfile() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const [cropOpen, setCropOpen] = useState<null | { kind: "avatar" | "cover"; file: File }>(null);
+  const [cropOpen, setCropOpen] =
+    useState<null | { kind: "avatar" | "cover"; file: File }>(null);
 
-  // load existing profile
+  // Load existing profile
   useEffect(() => {
     (async () => {
       if (!user) return;
@@ -43,7 +45,11 @@ export default function SettingsProfile() {
         .maybeSingle();
       setLoading(false);
       if (error) {
-        toast({ variant: "error", title: "Failed to load profile", description: error.message });
+        toast({
+          variant: "error",
+          title: "Failed to load profile",
+          description: error.message,
+        });
         return;
       }
       const p = (data as Profile) || null;
@@ -77,12 +83,17 @@ export default function SettingsProfile() {
     setSaving(false);
 
     if (error) {
-      toast({ variant: "error", title: "Couldn’t save", description: error.message });
+      toast({
+        variant: "error",
+        title: "Couldn’t save",
+        description: error.message,
+      });
       return;
     }
 
     toast({ variant: "success", title: "Profile saved" });
-    if (form.username) navigate(`/@${form.username}`, { replace: true });
+    // ✅ Go back to your profile page
+    navigate("/me", { replace: true });
   }
 
   function onPick(kind: "avatar" | "cover") {
@@ -97,15 +108,15 @@ export default function SettingsProfile() {
     input.click();
   }
 
-  async function onCropDone(cropped: Blob, meta: { width: number; height: number }) {
+  async function onCropDone(cropped: Blob, _meta: { width: number; height: number }) {
     if (!user || !cropOpen) return;
 
     try {
-      const ext = "webp"; // CropModal should export webp/png; choose a consistent ext
+      const ext = "webp"; // CropModal exports webp/png; use a consistent ext
       const bucket = cropOpen.kind === "avatar" ? "avatars" : "covers";
       const url = await uploadPublicBlob(bucket, user.id, cropped, ext);
 
-      // cache-bust
+      // cache-bust to avoid stale avatars/covers
       const busted = `${url}?v=${Date.now()}`;
 
       const patch: Record<string, any> =
@@ -114,7 +125,7 @@ export default function SettingsProfile() {
       const { error } = await supabase.from("profiles").update(patch).eq("id", user.id);
       if (error) throw error;
 
-      setProfile((p) => (p ? { ...p, ...patch } as Profile : p));
+      setProfile((p) => (p ? ({ ...p, ...patch } as Profile) : p));
       toast({
         variant: "success",
         title: cropOpen.kind === "avatar" ? "Avatar updated" : "Cover updated",
@@ -148,7 +159,9 @@ export default function SettingsProfile() {
           {profile?.cover_url ? (
             <img src={profile.cover_url} className="h-40 w-full object-cover" />
           ) : (
-            <div className="grid h-40 w-full place-items-center text-neutral-500">No cover</div>
+            <div className="grid h-40 w-full place-items-center text-neutral-500">
+              No cover
+            </div>
           )}
         </div>
         <button

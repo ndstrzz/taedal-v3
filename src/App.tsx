@@ -1,34 +1,29 @@
-// src/App.tsx
 import { Routes, Route } from "react-router-dom";
-import NavBar from "./components/NavBar";
 import Home from "./pages/Home";
-import CreateArtwork from "./pages/CreateArtwork";
-import SettingsProfile from "./pages/SettingsProfile";
-import PublicArtwork from "./routes/PublicArtwork";
-import PublicProfile from "./routes/PublicProfile";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
-import MeRedirect from "./pages/MeRedirect";
-import ProfilePage from "./pages/ProfilePage";
+import CreateArtwork from "./pages/CreateArtwork";
+import SettingsProfile from "./pages/SettingsProfile";
+import PublicProfile from "./routes/PublicProfile";
+import MyProfile from "./pages/MyProfile";
+// ...other imports
 
 export default function App() {
   return (
-    <div className="min-h-screen bg-black text-white">
-      <NavBar />
+    <>
+      {/* your NavBar etc */}
       <Routes>
         <Route path="/" element={<Home />} />
-        <Route path="/create" element={<CreateArtwork />} />
-        <Route path="/settings" element={<SettingsProfile />} />
-        <Route path="/a/:id" element={<PublicArtwork />} />
-        <Route path="/@:handle" element={<PublicProfile />} />
-        {/* auth pages if you have them */}
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
-        <Route path="/me" element={<MeRedirect />} />
-        <Route path="/@:handle" element={<ProfilePage />} />
-        {/* 404 */}
-        <Route path="*" element={<div className="p-8 text-neutral-400">Not found.</div>} />
+        <Route path="/create" element={<CreateArtwork />} />
+        <Route path="/settings" element={<SettingsProfile />} />
+        {/* 🔹 New: go to your own profile */}
+        <Route path="/me" element={<MyProfile />} />
+        {/* public profile by @handle */}
+        <Route path="/@:handle" element={<PublicProfile />} />
+        {/* ...other routes */}
       </Routes>
-    </div>
+    </>
   );
 }
