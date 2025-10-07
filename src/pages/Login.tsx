@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { useAuth } from "../state/AuthContext";
 import { supabase } from "../lib/supabase";
+import { destinationAfterAuth } from "../lib/profile";
 import "../index.css";
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [params] = useSearchParams();
-  const next = params.get("next") || "/";
+  const next = params.get("next");
   const { user, loading } = useAuth();
 
   const [form, setForm] = useState({ email: "", password: "" });
@@ -15,10 +17,14 @@ export default function Login() {
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // If already logged in, decide destination (/@username or /settings)
   useEffect(() => {
-    if (!loading && user) {
-      navigate(next, { replace: true });
-    }
+    (async () => {
+      if (!loading && user) {
+        const dest = await destinationAfterAuth(user.id, next);
+        navigate(dest, { replace: true });
+      }
+    })();
   }, [loading, user, next, navigate]);
 
   async function onSubmit(e: React.FormEvent) {
@@ -35,7 +41,8 @@ export default function Login() {
       return;
     }
     if (data.user) {
-      navigate(next, { replace: true });
+      const dest = await destinationAfterAuth(data.user.id, next);
+      navigate(dest, { replace: true });
     }
   }
 
@@ -44,17 +51,28 @@ export default function Login() {
     setMsg(null);
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: window.location.origin + `/login?next=${encodeURIComponent(next)}` },
+      options: {
+        // Return to /login so this component can route you to /@username or /settings
+        redirectTo: `${window.location.origin}/login?next=${encodeURIComponent(next || "")}`,
+      },
     });
     setBusy(false);
     if (error) setMsg(error.message);
   }
 
+  // Optional: show notice from redirects (e.g., from signup)
+  const stateNotice = (location.state as any)?.notice;
+
   return (
     <div className="mx-auto max-w-md p-6">
-      <h1 className="text-2xl font-semibold mb-4">Log in</h1>
+      <h1 className="mb-4 text-2xl font-semibold">Log in</h1>
 
-      {msg && <div className="mb-3 text-red-400 text-sm">{msg}</div>}
+      {(stateNotice || msg) && (
+        <div className="mb-3 text-sm">
+          {stateNotice && <div className="text-neutral-300">{stateNotice}</div>}
+          {msg && <div className="text-red-400">{msg}</div>}
+        </div>
+      )}
 
       <form onSubmit={onSubmit} className="space-y-3">
         <label className="block">
@@ -107,7 +125,7 @@ export default function Login() {
 
       <p className="mt-4 text-sm text-neutral-400">
         Don’t have an account?{" "}
-        <Link className="underline" to={`/signup?next=${encodeURIComponent(next)}`}>
+        <Link className="underline" to={`/signup?next=${encodeURIComponent(next || "")}`}>
           Sign up
         </Link>
       </p>

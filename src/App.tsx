@@ -8,6 +8,8 @@ import PublicArtwork from "./routes/PublicArtwork";
 import PublicProfile from "./routes/PublicProfile";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
+import MeRedirect from "./pages/MeRedirect";
+import ProfilePage from "./pages/ProfilePage";
 
 export default function App() {
   return (
@@ -22,6 +24,8 @@ export default function App() {
         {/* auth pages if you have them */}
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        <Route path="/me" element={<MeRedirect />} />
+        <Route path="/@:handle" element={<ProfilePage />} />
         {/* 404 */}
         <Route path="*" element={<div className="p-8 text-neutral-400">Not found.</div>} />
       </Routes>
