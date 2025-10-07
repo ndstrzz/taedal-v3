@@ -6,8 +6,6 @@ import { ensureProfileRow } from "../lib/profile";
 import FollowListModal from "../components/FollowListModal";
 import LikesGrid from "../components/LikesGrid";
 import CollectionsGrid from "../components/CollectionsGrid";
-import EditProfileInline from "../components/EditProfileInline";
-import SuggestionsRail from "../components/SuggestionsRail";
 
 type Profile = {
   id: string;
@@ -37,12 +35,7 @@ const ipfs = (cid?: string | null) => (cid ? `https://ipfs.io/ipfs/${cid}` : "")
 export default function MyProfile() {
   const { user } = useAuth();
   const [search, setSearch] = useSearchParams();
-  const tab = (search.get("tab") || "artworks") as
-    | "artworks"
-    | "likes"
-    | "collections"
-    | "activity"
-    | "edit";
+  const tab = (search.get("tab") || "artworks") as "artworks" | "likes" | "collections" | "activity";
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
@@ -55,49 +48,44 @@ export default function MyProfile() {
 
   const [showModal, setShowModal] = useState<null | "followers" | "following">(null);
 
-  // Load (and ensure) profile row
   useEffect(() => {
     (async () => {
       if (!user) return;
       await ensureProfileRow(user.id);
       setLoadingProfile(true);
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from("profiles")
         .select("id,username,display_name,bio,avatar_url,cover_url,website,instagram,twitter")
         .eq("id", user.id)
         .maybeSingle();
-      if (!error) setProfile((data as Profile) || null);
+      setProfile((data as Profile) || null);
       setLoadingProfile(false);
     })();
   }, [user]);
 
-  // Counts
   useEffect(() => {
     if (!profile) return;
     (async () => {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from("profile_counts")
         .select("posts,followers,following")
         .eq("user_id", profile.id)
         .maybeSingle();
-      if (!error) {
-        setCounts({
-          posts: data?.posts ?? 0,
-          followers: data?.followers ?? 0,
-          following: data?.following ?? 0,
-        });
-      }
+      setCounts({
+        posts: data?.posts ?? 0,
+        followers: data?.followers ?? 0,
+        following: data?.following ?? 0,
+      });
     })();
   }, [profile]);
 
-  // Artworks pagination
   async function loadMore() {
     if (!profile || loadingMore) return;
     setLoadingMore(true);
     const from = page * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
 
-    const { data, error, count } = await supabase
+    const { data, count } = await supabase
       .from("artworks")
       .select("id,title,cover_url,image_cid,created_at", { count: "exact" })
       .eq("owner", profile.id)
@@ -106,8 +94,6 @@ export default function MyProfile() {
       .range(from, to);
 
     setLoadingMore(false);
-    if (error) return;
-
     const rows = (data || []) as Artwork[];
     setArtworks((prev) => [...prev, ...rows]);
     setPage((p) => p + 1);
@@ -115,7 +101,6 @@ export default function MyProfile() {
     setHasMore(from + rows.length < total);
   }
 
-  // Reset on profile change
   useEffect(() => {
     setArtworks([]); setPage(0); setHasMore(true);
     if (profile) loadMore();
@@ -193,12 +178,12 @@ export default function MyProfile() {
           </div>
 
           <div className="mb-2 hidden md:block">
-            <button
-              onClick={() => setTab("edit")}
+            <Link
+              to="/settings?from=me"
               className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900 focus:outline-none focus:ring focus:ring-border"
             >
               Edit profile
-            </button>
+            </Link>
           </div>
         </div>
 
@@ -206,22 +191,16 @@ export default function MyProfile() {
         <div className="mt-6 flex flex-wrap items-end justify-between gap-4">
           <div className="flex gap-6 text-sm">
             <div><span className="font-semibold">{counts.posts}</span> posts</div>
-            <button
-              className="text-left hover:underline rounded focus:outline-none focus:ring focus:ring-border"
-              onClick={() => setShowModal("followers")}
-            >
+            <button className="text-left hover:underline rounded focus:outline-none focus:ring focus:ring-border" onClick={() => setShowModal("followers")}>
               <span className="font-semibold">{counts.followers}</span> followers
             </button>
-            <button
-              className="text-left hover:underline rounded focus:outline-none focus:ring focus:ring-border"
-              onClick={() => setShowModal("following")}
-            >
+            <button className="text-left hover:underline rounded focus:outline-none focus:ring focus:ring-border" onClick={() => setShowModal("following")}>
               <span className="font-semibold">{counts.following}</span> following
             </button>
           </div>
 
           <div className="flex gap-2">
-            {(["artworks","likes","collections","activity","edit"] as const).map((t) => (
+            {(["artworks","likes","collections","activity"] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -247,74 +226,54 @@ export default function MyProfile() {
         />
       )}
 
-      {/* Main content + suggestions */}
-      <div className="mx-auto max-w-6xl gap-8 px-4 py-8 md:grid md:grid-cols-[1fr_280px]">
-        <div>
-          {tab === "artworks" && (
-            <>
-              <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-                {artworks.map((a) => {
-                  const img = a.cover_url || ipfs(a.image_cid);
-                  return (
-                    <li key={a.id} className="group">
-                      <Link to={`/a/${a.id}`}>
-                        <div className="aspect-square w-full overflow-hidden rounded-2xl bg-neutral-900">
-                          {img ? (
-                            <img
-                              src={img}
-                              alt={a.title ?? ""}
-                              className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                              loading="lazy"
-                            />
-                          ) : (
-                            <div className="grid h-full w-full place-items-center text-sm text-neutral-500">No image</div>
-                          )}
-                        </div>
-                        <div className="mt-2 truncate text-sm text-neutral-200">{a.title || "Untitled"}</div>
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
+      {/* Main */}
+      <div className="mx-auto max-w-6xl px-4 py-8">
+        {tab === "artworks" && (
+          <>
+            <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+              {artworks.map((a) => {
+                const img = a.cover_url || ipfs(a.image_cid);
+                return (
+                  <li key={a.id} className="group">
+                    <Link to={`/a/${a.id}`}>
+                      <div className="aspect-square w-full overflow-hidden rounded-2xl bg-neutral-900">
+                        {img ? (
+                          <img
+                            src={img}
+                            alt={a.title ?? ""}
+                            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="grid h-full w-full place-items-center text-sm text-neutral-500">No image</div>
+                        )}
+                      </div>
+                      <div className="mt-2 truncate text-sm text-neutral-200">{a.title || "Untitled"}</div>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
 
-              {hasMore && (
-                <div className="mt-6">
-                  <button
-                    onClick={loadMore}
-                    disabled={loadingMore}
-                    className="rounded-xl border border-neutral-700 px-4 py-2 text-sm disabled:opacity-60 hover:bg-neutral-900"
-                  >
-                    {loadingMore ? "Loading…" : "Load more"}
-                  </button>
-                </div>
-              )}
-            </>
-          )}
+            {hasMore && (
+              <div className="mt-6">
+                <button
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="rounded-xl border border-neutral-700 px-4 py-2 text-sm disabled:opacity-60 hover:bg-neutral-900"
+                >
+                  {loadingMore ? "Loading…" : "Load more"}
+                </button>
+              </div>
+            )}
+          </>
+        )}
 
-          {tab === "likes" && <LikesGrid profileId={profile.id} />}
+        {tab === "likes" && <LikesGrid profileId={profile.id} />}
 
-          {tab === "collections" && <CollectionsGrid ownerId={profile.id} isOwner />}
+        {tab === "collections" && <CollectionsGrid ownerId={profile.id} isOwner={true} />}
 
-          {tab === "activity" && <div className="text-neutral-400">Activity feed coming soon.</div>}
-
-          {tab === "edit" && (
-            <EditProfileInline
-              userId={profile.id}
-              initial={profile}
-              onSaved={async () => {
-                const { data } = await supabase
-                  .from("profiles")
-                  .select("id,username,display_name,bio,avatar_url,cover_url,website,instagram,twitter")
-                  .eq("id", user!.id)
-                  .maybeSingle();
-                setProfile((data as Profile) || profile);
-              }}
-            />
-          )}
-        </div>
-
-        {/* Suggestions rail (same logic as public profile) */}
-        <SuggestionsRail ownerId={profile.id} />
+        {tab === "activity" && <div className="text-neutral-400">Activity feed coming soon.</div>}
       </div>
     </div>
   );
