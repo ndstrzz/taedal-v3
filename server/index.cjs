@@ -153,28 +153,39 @@ app.post('/api/metadata', async (req, res) => {
 
 // ---- Similarity / Hashing -------------------------------------------------
 app.post('/api/hashes', upload.single('file'), async (req, res) => {
-  console.log('[hashes] hit', req.file?.originalname, req.file?.mimetype, req.file?.size)
   try {
-    if (!req.file) return res.status(400).json({ error: 'No file' })
-    const buf = req.file.buffer
-
-    // sha256 is always available
-    const sha = sha256Hex(buf)
-
-    // Try dHash; if this isn't an image, sharp will fail — that's OK
-    let dhash = null
-    try {
-      dhash = await dhash64(buf)
-    } catch (e) {
-      console.warn('[hashes] dhash failed (likely non-image):', e?.message || e)
+    if (!req.file) {
+      console.warn('[hashes] no file field found');
+      // Always succeed with a soft response so the client can continue
+      return res.json({ dhash64: null, sha256: null, note: 'no file' });
     }
 
-    return res.json({ dhash64: dhash, sha256: sha })
+    const buf = req.file.buffer;
+    const mime = req.file.mimetype || '';
+
+    // sha256 is always available and cheap
+    const sha = sha256Hex(buf);
+
+    let dhash = null;
+    if (mime.startsWith('image/')) {
+      try {
+        dhash = await dhash64(buf);
+      } catch (e) {
+        console.warn('[hashes] dHash failed (image decode):', e?.message || e);
+      }
+    } else {
+      console.log('[hashes] skipped dHash (non-image):', mime);
+    }
+
+    // Always 200 so the client flow never breaks
+    return res.json({ dhash64: dhash, sha256: sha });
   } catch (e) {
-    console.error('[hashes] error', e)
-    return res.status(500).json({ error: 'hashing failed' })
+    console.error('[hashes] unexpected error:', e);
+    // Still reply 200 with nulls; client can proceed
+    return res.json({ dhash64: null, sha256: null, note: 'unexpected error' });
   }
-})
+});
+
 
 // robust: accept 'artwork' OR 'file' + soft timeout
 app.post('/api/verify', upload.any(), async (req, res) => {

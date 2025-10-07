@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../state/AuthContext";
 import { supabase } from "../lib/supabase";
@@ -194,14 +194,24 @@ export default function CreateArtwork() {
       setProgress(100);
       toast({ variant: "success", title: "Pinned media to IPFS" });
 
-      // 3) hashes
-      const fd1 = new FormData();
-      fd1.append("file", file);
-      const r1 = await fetch(`${API_BASE.replace(/\/$/, "")}/api/hashes`, { method: "POST", body: fd1 });
-      if (!r1.ok) throw new Error(`Failed to compute hashes (${r1.status})`);
-      const { dhash64, sha256 } = await r1.json();
-      setPendingDHash(dhash64 || "");
-      setPendingSha256(sha256 || "");
+      // 3) hashes — use the poster for videos (server only dHashes images)
+      let dh = "", sh = "";
+      try {
+        const fd1 = new FormData();
+        const blobForHash =
+          isVideo && posterBlob
+            ? new File([posterBlob], "poster.webp", { type: "image/webp" })
+            : file;
+        fd1.append("file", blobForHash);
+        const r1 = await fetch(`${API_BASE.replace(/\/$/, "")}/api/hashes`, { method: "POST", body: fd1 });
+        const j = await r1.json().catch(() => ({} as any));
+        dh = j?.dhash64 || "";
+        sh = j?.sha256 || "";
+      } catch {
+        /* soft-fail */
+      }
+      setPendingDHash(dh);
+      setPendingSha256(sh);
 
       // 4) metadata (image or poster; optional animation_url)
       const body: any = {
@@ -210,9 +220,8 @@ export default function CreateArtwork() {
         attributes: attributes?.length ? attributes : undefined,
       };
       if (isVideo) {
-        // pass IPFS-style poster url if available
         body.image = posterGateway ? posterGateway.replace("https://gateway.pinata.cloud/ipfs/","ipfs://") : undefined;
-        body.animationCid = mediaCid; // server also accepts animationCid
+        body.animationCid = mediaCid;
       } else {
         body.imageCid = mediaCid;
       }
