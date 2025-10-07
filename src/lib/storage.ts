@@ -1,35 +1,38 @@
 // src/lib/storage.ts
-import { supabase } from './supabase'
+import { supabase } from "./supabase";
 
-export async function uploadPublicFile(
-  bucket: 'avatars' | 'covers',
-  userId: string,
-  file: File
-): Promise<string> {
-  const ext = (file.name.split('.').pop() || 'bin').toLowerCase()
-  const path = `${userId}/${Date.now()}.${ext}`
-  const { error } = await supabase.storage.from(bucket).upload(path, file, {
-    cacheControl: '3600',
-    upsert: true,
-  })
-  if (error) throw error
-  const { data } = supabase.storage.from(bucket).getPublicUrl(path)
-  return data.publicUrl
-}
-
+/**
+ * Uploads a blob to a public Storage bucket under <userId>/<random>.<ext>
+ * and returns a cache-busted public URL.
+ */
 export async function uploadPublicBlob(
-  bucket: 'avatars' | 'covers',
+  bucket: "avatars" | "covers",
   userId: string,
   blob: Blob,
-  ext = 'jpg'
+  ext = "webp"
 ): Promise<string> {
-  const path = `${userId}/${Date.now()}.${ext}`
-  const { error } = await supabase.storage.from(bucket).upload(path, blob, {
-    cacheControl: '3600',
-    upsert: true,
-    contentType: `image/${ext === 'jpg' ? 'jpeg' : ext}`,
-  })
-  if (error) throw error
-  const { data } = supabase.storage.from(bucket).getPublicUrl(path)
-  return data.publicUrl
+  if (!userId) throw new Error("uploadPublicBlob: missing userId");
+
+  // key must begin with the user's UUID or RLS will reject
+  const key = `${userId}/${crypto.randomUUID()}.${ext.replace(/^\./, "")}`;
+
+  // pick a content type
+  const contentType =
+    blob.type ||
+    (ext === "png"
+      ? "image/png"
+      : ext === "jpg" || ext === "jpeg"
+      ? "image/jpeg"
+      : "image/webp");
+
+  const { error } = await supabase.storage.from(bucket).upload(key, blob, {
+    contentType,
+    cacheControl: "31536000",
+    upsert: false,
+  });
+  if (error) throw error;
+
+  const { data } = supabase.storage.from(bucket).getPublicUrl(key);
+  // add a cache-buster so the new image shows immediately
+  return `${data.publicUrl}?v=${Date.now()}`;
 }
