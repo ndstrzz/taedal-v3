@@ -34,7 +34,6 @@ export default function PublicProfile() {
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
 
   const [counts, setCounts] = useState<Counts>({ posts: 0, followers: 0, following: 0 });
 
@@ -43,16 +42,14 @@ export default function PublicProfile() {
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  // follow state
   const [isFollowing, setIsFollowing] = useState<boolean>(false);
   const [followBusy, setFollowBusy] = useState(false);
 
-  // Fetch profile by username
+  // Load profile by @username
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
-      setErr(null);
       const { data, error } = await supabase
         .from("profiles")
         .select("*")
@@ -61,7 +58,6 @@ export default function PublicProfile() {
 
       if (cancelled) return;
       if (error || !data) {
-        setErr(error?.message || "notfound");
         setProfile(null);
         setLoading(false);
         return;
@@ -74,7 +70,7 @@ export default function PublicProfile() {
     };
   }, [username]);
 
-  // counts via view
+  // Counts from the view
   useEffect(() => {
     if (!profile) return;
     (async () => {
@@ -91,7 +87,7 @@ export default function PublicProfile() {
     })();
   }, [profile]);
 
-  // initial follow state (if signed in & not own profile)
+  // Initial follow state
   useEffect(() => {
     if (!user || !profile || user.id === profile.id) {
       setIsFollowing(false);
@@ -107,29 +103,32 @@ export default function PublicProfile() {
     })();
   }, [user, profile]);
 
+  // Toggle follow/unfollow
   async function toggleFollow() {
     if (!user || !profile || user.id === profile.id || followBusy) return;
     setFollowBusy(true);
+
+    const prevFollowing = isFollowing;
+    // optimistic bump
+    setIsFollowing(!prevFollowing);
+    setCounts((c) => ({ ...c, followers: c.followers + (prevFollowing ? -1 : 1) }));
+
     try {
-      if (isFollowing) {
-        // unfollow
+      if (prevFollowing) {
         const { error } = await supabase
           .from("follows")
           .delete()
           .eq("follower_id", user.id)
           .eq("target_id", profile.id);
         if (error) throw error;
-        setIsFollowing(false);
       } else {
-        // follow
         const { error } = await supabase
           .from("follows")
           .insert({ follower_id: user.id, target_id: profile.id });
         if (error) throw error;
-        setIsFollowing(true);
       }
 
-      // refresh counts after change
+      // sanity refresh from the view
       const { data } = await supabase
         .from("profile_counts")
         .select("posts,followers,following")
@@ -141,14 +140,22 @@ export default function PublicProfile() {
         following: data?.following ?? 0,
       });
     } catch (e: any) {
-      toast({ variant: "error", title: "Follow action failed", description: e?.message || String(e) });
+      // undo optimistic on error
+      setIsFollowing(prevFollowing);
+      setCounts((c) => ({ ...c, followers: c.followers + (prevFollowing ? 1 : -1) }));
+      toast({
+        variant: "error",
+        title: "Follow action failed",
+        description: e?.message || String(e),
+      });
     } finally {
       setFollowBusy(false);
     }
   }
 
+  // Artworks pagination
   async function loadMore() {
-    if (!profile) return;
+    if (!profile || loadingMore) return;
     setLoadingMore(true);
     const from = page * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
@@ -161,9 +168,9 @@ export default function PublicProfile() {
       .order("created_at", { ascending: false })
       .range(from, to);
 
+    setLoadingMore(false);
     if (error) {
       toast({ variant: "error", title: "Couldn’t load artworks", description: error.message });
-      setLoadingMore(false);
       return;
     }
     const rows = (data || []) as Artwork[];
@@ -171,16 +178,13 @@ export default function PublicProfile() {
     setPage((p) => p + 1);
     const total = typeof count === "number" ? count : 0;
     setHasMore(from + rows.length < total);
-    setLoadingMore(false);
   }
 
+  // Reset grid on profile change & grab first page
   useEffect(() => {
     setArtworks([]);
     setPage(0);
     setHasMore(true);
-  }, [profile?.id]);
-
-  useEffect(() => {
     if (profile) loadMore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.id]);
@@ -194,7 +198,6 @@ export default function PublicProfile() {
     return <div className="p-8 text-neutral-400">Loading profile…</div>;
   }
 
-  // Not found UX: suggest settings if this *might* be the owner
   if (!profile) {
     return (
       <div className="p-8">
@@ -211,19 +214,14 @@ export default function PublicProfile() {
     );
   }
 
-  const showFollow = user && user.id !== profile.id;
+  const showFollow = !!user && user.id !== profile.id;
 
   return (
     <div>
       {/* Cover */}
       <div className="h-48 w-full bg-neutral-900">
         {profile.cover_url && (
-          <img
-            src={profile.cover_url}
-            alt=""
-            className="h-48 w-full object-cover"
-            loading="lazy"
-          />
+          <img src={profile.cover_url} alt="" className="h-48 w-full object-cover" loading="lazy" />
         )}
       </div>
 
@@ -237,9 +235,7 @@ export default function PublicProfile() {
           />
           <div className="flex-1 pb-2">
             <h1 className="text-2xl font-semibold">{displayName}</h1>
-            {profile.username && (
-              <div className="text-sm text-neutral-400">@{profile.username}</div>
-            )}
+            {profile.username && <div className="text-sm text-neutral-400">@{profile.username}</div>}
             {profile.bio && <p className="mt-2 max-w-3xl text-neutral-300">{profile.bio}</p>}
           </div>
 

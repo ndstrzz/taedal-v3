@@ -1,4 +1,4 @@
-import { Link, NavLink } from "react-router-dom";
+import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../state/AuthContext";
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
@@ -10,8 +10,10 @@ type MiniProfile = {
 
 export default function NavBar() {
   const { user, signOut } = useAuth();
+  const navigate = useNavigate();
 
   const [mini, setMini] = useState<MiniProfile | null>(null);
+  const [jump, setJump] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -25,17 +27,21 @@ export default function NavBar() {
         .select("username,avatar_url")
         .eq("id", user.id)
         .maybeSingle();
-      if (!cancelled) {
-        setMini((data as MiniProfile) || { username: null, avatar_url: null });
-      }
+      if (!cancelled) setMini((data as MiniProfile) || { username: null, avatar_url: null });
     })();
     return () => {
       cancelled = true;
     };
   }, [user]);
 
-  // ✅ Always go to /me — that page will route to the user's public profile UI.
   const profileHref = user ? "/me" : "/login";
+
+  function onJump(e: React.FormEvent) {
+    e.preventDefault();
+    const h = jump.trim().replace(/^@/, "");
+    if (h) navigate(`/@${h}`);
+    setJump("");
+  }
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-neutral-800 bg-black/70 backdrop-blur">
@@ -52,10 +58,24 @@ export default function NavBar() {
           <NavLink to="/portfolio" className="text-sm text-neutral-300 hover:text-white">
             Portfolio
           </NavLink>
-          <NavLink to="/create" className="rounded-lg border border-neutral-700 px-2 py-1 text-sm hover:bg-neutral-900">
+          <NavLink
+            to="/create"
+            className="rounded-lg border border-neutral-700 px-2 py-1 text-sm hover:bg-neutral-900"
+          >
             Create
           </NavLink>
         </nav>
+
+        {/* quick @username jump (optional) */}
+        <form onSubmit={onJump} className="ml-4 hidden md:flex items-center gap-2">
+          <span className="text-sm text-neutral-400">@</span>
+          <input
+            value={jump}
+            onChange={(e) => setJump(e.target.value)}
+            placeholder="username"
+            className="w-36 rounded-md bg-neutral-900 px-2 py-1 text-sm border border-neutral-800"
+          />
+        </form>
 
         <div className="ml-auto flex items-center gap-2">
           {user ? (
