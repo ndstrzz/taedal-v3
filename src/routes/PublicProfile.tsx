@@ -138,7 +138,7 @@ export default function PublicProfile() {
 
       // Try row-per-badge view
       const { data: b1, error: e1 } = await supabase
-        .from("profile_badges")
+        .from("profile_badges_rows")
         .select("kind,label")
         .eq("user_id", profile.id);
 
