@@ -101,27 +101,35 @@ app.post('/api/pinata/pin-file', upload.single('file'), async (req, res) => {
 
 // ---- IPFS / Pinata --------------------------------------------------------
 
+// in server/index.cjs (metadata route)
 app.post('/api/metadata', async (req, res) => {
   try {
     if (!PINATA_JWT) {
       return res.status(500).json({ error: 'Server misconfigured: PINATA_JWT missing' })
     }
 
-    const payload = req.body || {}
+    const p = req.body || {}
 
-    // Prefer `image` (already an ipfs:// url), fallback to legacy `imageCid`
     const image =
-      typeof payload.image === 'string' && payload.image.trim()
-        ? payload.image.trim()
-        : (payload.imageCid ? `ipfs://${payload.imageCid}` : undefined)
+      typeof p.image === 'string' && p.image.trim()
+        ? p.image.trim()
+        : (p.imageCid ? `ipfs://${p.imageCid}` : undefined)
+
+    // NEW: allow animation_url (video/audio, etc.)
+    const animation_url =
+      typeof p.animation_url === 'string' && p.animation_url.trim()
+        ? p.animation_url.trim()
+        : (typeof p.animationUrl === 'string' && p.animationUrl.trim()
+            ? p.animationUrl.trim()
+            : (p.animationCid ? `ipfs://${p.animationCid}` : undefined))
 
     const meta = {
-      name: String(payload.name || 'Untitled'),
-      description: String(payload.description || ''),
+      name: String(p.name || 'Untitled'),
+      description: String(p.description || ''),
       image,
-      // keep any extra attributes you might pass through
-      attributes: payload.attributes,
-      properties: payload.properties,
+      animation_url,
+      attributes: p.attributes,
+      properties: p.properties,
     }
 
     const { data } = await axios.post(
@@ -133,7 +141,7 @@ app.post('/api/metadata', async (req, res) => {
     const cid = data.IpfsHash
     res.json({
       metadata_cid: cid,
-      metadata_url: `ipfs://${cid}`,                  // 👈 convenience field for the client
+      metadata_url: `ipfs://${cid}`,
       ipfsUri: `ipfs://${cid}`,
       gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}`,
     })
