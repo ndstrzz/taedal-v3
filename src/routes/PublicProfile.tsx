@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useToast } from "../components/Toaster";
 import { useAuth } from "../state/AuthContext";
@@ -36,6 +36,8 @@ export default function PublicProfile() {
 
   const { toast } = useToast();
   const { user } = useAuth();
+  const [search, setSearch] = useSearchParams();
+  const tab = (search.get("tab") || "art") as "art" | "likes";
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -253,6 +255,83 @@ export default function PublicProfile() {
             <span className="font-semibold">{counts.following}</span> following
           </button>
         </div>
+
+        {/* Tabs */}
+        <div className="mt-6 flex gap-2">
+          {[
+            { k: "art", label: "Artworks" },
+            { k: "likes", label: "Likes" },
+          ].map((t) => (
+            <button
+              key={t.k}
+              onClick={() => setSearch({ tab: t.k })}
+              className={`rounded-full border px-3 py-1 text-sm ${
+                tab === (t.k as any) ? "border-neutral-400 bg-neutral-800" : "border-neutral-700 hover:bg-neutral-900"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="mx-auto max-w-6xl px-4 py-8">
+        {tab === "art" && (
+          <>
+            {artworks.length === 0 && !hasMore && (
+              <div className="rounded-xl border border-neutral-800 p-6 text-neutral-300">
+                <div className="mb-2">No published artworks yet.</div>
+                {user?.id === profile.id && (
+                  <Link to="/create" className="underline">Upload your first artwork</Link>
+                )}
+              </div>
+            )}
+
+            <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+              {artworks.map((a) => {
+                const img = a.cover_url || ipfs(a.image_cid);
+                return (
+                  <li key={a.id} className="group">
+                    <Link to={`/a/${a.id}`}>
+                      <div className="aspect-square w-full overflow-hidden rounded-2xl bg-neutral-900">
+                        {img ? (
+                          <img
+                            src={img}
+                            alt={a.title ?? ""}
+                            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="grid h-full w-full place-items-center text-sm text-neutral-500">
+                            No image
+                          </div>
+                        )}
+                      </div>
+                      <div className="mt-2 truncate text-sm text-neutral-200">
+                        {a.title || "Untitled"}
+                      </div>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+
+            {hasMore && (
+              <div className="mt-6">
+                <button
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="rounded-xl border border-neutral-700 px-4 py-2 text-sm disabled:opacity-60 hover:bg-neutral-900"
+                >
+                  {loadingMore ? "Loading…" : "Load more"}
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {tab === "likes" && <LikesGrid profileId={profile.id} />}
       </div>
 
       {/* Followers/Following modal */}
@@ -265,67 +344,6 @@ export default function PublicProfile() {
           onClose={() => setShowModal(null)}
         />
       )}
-
-      {/* Artworks grid */}
-      <div className="mx-auto max-w-6xl px-4 py-8">
-        <h2 className="mb-4 text-lg font-semibold">Artworks</h2>
-
-        {artworks.length === 0 && !hasMore && (
-          <div className="rounded-xl border border-neutral-800 p-6 text-neutral-300">
-            <div className="mb-2">No published artworks yet.</div>
-            {user?.id === profile.id && (
-              <Link to="/create" className="underline">Upload your first artwork</Link>
-            )}
-          </div>
-        )}
-
-        <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-          {artworks.map((a) => {
-            const img = a.cover_url || ipfs(a.image_cid);
-            return (
-              <li key={a.id} className="group">
-                <Link to={`/a/${a.id}`}>
-                  <div className="aspect-square w-full overflow-hidden rounded-2xl bg-neutral-900">
-                    {img ? (
-                      <img
-                        src={img}
-                        alt={a.title ?? ""}
-                        className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="grid h-full w-full place-items-center text-sm text-neutral-500">
-                        No image
-                      </div>
-                    )}
-                  </div>
-                  <div className="mt-2 truncate text-sm text-neutral-200">
-                    {a.title || "Untitled"}
-                  </div>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-
-        {hasMore && (
-          <div className="mt-6">
-            <button
-              onClick={loadMore}
-              disabled={loadingMore}
-              className="rounded-xl border border-neutral-700 px-4 py-2 text-sm disabled:opacity-60 hover:bg-neutral-900"
-            >
-              {loadingMore ? "Loading…" : "Load more"}
-            </button>
-          </div>
-        )}
-
-        {/* Likes (bonus surface with your existing LikesGrid) */}
-        <div className="mt-12">
-          <h3 className="mb-3 text-lg font-semibold">Likes</h3>
-          <LikesGrid profileId={profile.id} />
-        </div>
-      </div>
     </div>
   );
 }
