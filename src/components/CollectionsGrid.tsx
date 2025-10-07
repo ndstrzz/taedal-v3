@@ -20,17 +20,21 @@ export default function CollectionsGrid({ ownerId, isOwner }: Props) {
   const [title, setTitle] = useState("");
   const [isPublic, setIsPublic] = useState(true);
 
+  async function fetchAll() {
+    setLoading(true);
+    const { data } = await supabase
+      .from("collections")
+      .select("*")
+      .eq("owner_id", ownerId)
+      .order("created_at", { ascending: false });
+    const list = ((data || []) as Collection[]).filter((c) => isOwner || c.is_public);
+    setRows(list);
+    setLoading(false);
+  }
+
   useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const { data } = await supabase
-        .from("collections")
-        .select("*")
-        .eq("owner_id", ownerId)
-        .order("created_at", { ascending: false });
-      setRows(((data || []) as Collection[]).filter((c) => isOwner || c.is_public));
-      setLoading(false);
-    })();
+    fetchAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownerId, isOwner]);
 
   async function createCollection() {
@@ -42,12 +46,18 @@ export default function CollectionsGrid({ ownerId, isOwner }: Props) {
       .select("*")
       .single();
     setBusy(false);
-    if (!error && data) {
+    if (error) return;
+    if (data) {
       setRows((r) => [data as Collection, ...r]);
       setTitle("");
       setIsPublic(true);
       setShowNew(false);
     }
+  }
+
+  async function togglePublic(id: string, next: boolean) {
+    setRows((r) => r.map((c) => (c.id === id ? { ...c, is_public: next } : c)));
+    await supabase.from("collections").update({ is_public: next }).eq("id", id);
   }
 
   const empty = useMemo(() => rows.length === 0, [rows]);
@@ -102,7 +112,9 @@ export default function CollectionsGrid({ ownerId, isOwner }: Props) {
 
       {loading && <div className="text-sm text-neutral-400">Loading collections…</div>}
       {!loading && empty && (
-        <div className="text-neutral-400">{isOwner ? "No collections yet. Create one." : "No public collections yet."}</div>
+        <div className="text-neutral-400">
+          {isOwner ? "No collections yet. Create one." : "No public collections yet."}
+        </div>
       )}
 
       <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
@@ -122,9 +134,24 @@ export default function CollectionsGrid({ ownerId, isOwner }: Props) {
                 </div>
               )}
             </div>
-            <div className="mt-2 truncate text-sm text-neutral-200">
-              {c.title || "Untitled"}
-              {!c.is_public && <span className="ml-2 rounded-full border border-neutral-700 px-2 py-[2px] text-[10px] text-neutral-300">Private</span>}
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <div className="truncate text-sm text-neutral-200">
+                {c.title || "Untitled"}
+                {!c.is_public && (
+                  <span className="ml-2 rounded-full border border-neutral-700 px-2 py-[2px] text-[10px] text-neutral-300">
+                    Private
+                  </span>
+                )}
+              </div>
+              {isOwner && (
+                <button
+                  onClick={() => togglePublic(c.id, !c.is_public)}
+                  className="shrink-0 rounded-lg border border-neutral-700 px-2 py-1 text-xs hover:bg-neutral-900"
+                  title={c.is_public ? "Make private" : "Make public"}
+                >
+                  {c.is_public ? "Public" : "Private"}
+                </button>
+              )}
             </div>
           </li>
         ))}

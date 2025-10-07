@@ -7,7 +7,7 @@ import FollowButton from "../components/FollowButton";
 import FollowListModal from "../components/FollowListModal";
 import LikesGrid from "../components/LikesGrid";
 import CollectionsGrid from "../components/CollectionsGrid";
-import UserCard from "../components/UserCard";
+import SuggestionsRail from "../components/SuggestionsRail";
 import { updateSEO } from "../lib/seo";
 
 type Profile = {
@@ -53,7 +53,6 @@ export default function PublicProfile() {
   const [loadingMore, setLoadingMore] = useState(false);
 
   const [showModal, setShowModal] = useState<null | "followers" | "following">(null);
-  const [suggested, setSuggested] = useState<any[]>([]);
 
   // Load profile
   useEffect(() => {
@@ -71,7 +70,6 @@ export default function PublicProfile() {
 
       if (cancelled) return;
       setLoading(false);
-
       if (error) { toast({ variant: "error", title: "Couldn’t load profile", description: error.message }); return; }
       setProfile((data || null) as Profile | null);
     })();
@@ -79,22 +77,44 @@ export default function PublicProfile() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [username]);
 
-  // Counts + badges + suggestions
+  // Counts + badges (robust to table OR view)
   useEffect(() => {
     if (!profile) return;
     (async () => {
-      const [{ data: c }, { data: b }, { data: s }] = await Promise.all([
-        supabase.from("profile_counts").select("posts,followers,following").eq("user_id", profile.id).maybeSingle(),
-        supabase.from("profile_badges").select("kind,label").eq("user_id", profile.id),
-        supabase
-          .from("suggested_follows")
-          .select("id,username,display_name,avatar_url")
-          .eq("user_id", profile.id)
-          .limit(6),
-      ]);
+      const { data: c } = await supabase
+        .from("profile_counts")
+        .select("posts,followers,following")
+        .eq("user_id", profile.id)
+        .maybeSingle();
       setCounts({ posts: c?.posts ?? 0, followers: c?.followers ?? 0, following: c?.following ?? 0 });
-      setBadges(((b as Badge[]) || []).slice(0, 4));
-      setSuggested((s as any[]) || []);
+
+      // 1) Try row-per-badge view: (user_id, kind, label)
+      const { data: b1, error: e1 } = await supabase
+        .from("profile_badges")
+        .select("kind,label")
+        .eq("user_id", profile.id);
+
+      if (!e1 && Array.isArray(b1) && b1.length) {
+        setBadges((b1 as any[]).slice(0, 4) as Badge[]);
+        return;
+      }
+
+      // 2) Fallback to boolean table: (verified, staff, top_seller)
+      const { data: b2 } = await supabase
+        .from("profile_badges")
+        .select("verified,staff,top_seller")
+        .eq("user_id", profile.id)
+        .maybeSingle();
+
+      if (b2) {
+        const list: Badge[] = [];
+        if ((b2 as any).verified)   list.push({ kind: "verified",   label: "Verified" });
+        if ((b2 as any).staff)      list.push({ kind: "staff",      label: "Staff" });
+        if ((b2 as any).top_seller) list.push({ kind: "top_seller", label: "Top seller" });
+        setBadges(list);
+      } else {
+        setBadges([]);
+      }
     })();
   }, [profile]);
 
@@ -338,15 +358,7 @@ export default function PublicProfile() {
         </div>
 
         {/* Suggestions rail */}
-        <aside className="mt-8 md:mt-0">
-          <div className="mb-3 text-sm font-semibold text-neutral-300">People also follow</div>
-          <div className="grid gap-2">
-            {suggested.length === 0 && <div className="text-neutral-500">No suggestions.</div>}
-            {suggested.map((u) => (
-              <UserCard key={u.id} {...u} subtitle="Followed by followers" />
-            ))}
-          </div>
-        </aside>
+        <SuggestionsRail ownerId={profile.id} />
       </div>
     </div>
   );
