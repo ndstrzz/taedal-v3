@@ -4,11 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import useDebounce from "../hooks/useDebounce";
 
-type MiniProfile = {
-  username: string | null;
-  avatar_url: string | null;
-};
-
+type MiniProfile = { username: string | null; avatar_url: string | null };
 type SearchRow = {
   id: string;
   username: string | null;
@@ -20,33 +16,27 @@ export default function NavBar() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
 
-  // ----- mini avatar in the nav
+  // mini avatar
   const [mini, setMini] = useState<MiniProfile | null>(null);
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!user) {
-        setMini(null);
-        return;
-      }
+      if (!user) return setMini(null);
       const { data } = await supabase
         .from("profiles")
         .select("username,avatar_url")
         .eq("id", user.id)
         .maybeSingle();
-      if (!cancelled) {
-        setMini((data as MiniProfile) || { username: null, avatar_url: null });
-      }
+      if (!cancelled) setMini((data as MiniProfile) || { username: null, avatar_url: null });
     })();
     return () => {
       cancelled = true;
     };
   }, [user]);
 
-  // Always go to /me for your own profile
   const profileHref = user ? "/me" : "/login";
 
-  // ----- search state
+  // search
   const [q, setQ] = useState("");
   const dq = useDebounce(q.trim(), 250);
   const [open, setOpen] = useState(false);
@@ -57,7 +47,6 @@ export default function NavBar() {
   const boxRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // fetch results (from the VIEW)
   useEffect(() => {
     let cancelled = false;
     async function run() {
@@ -66,17 +55,11 @@ export default function NavBar() {
         return;
       }
       setLoading(true);
-
-      // escape % and _ for ILIKE
       const esc = dq.replace(/%/g, "\\%").replace(/_/g, "\\_");
-
       const { data, error } = await supabase
-        .from("public_profiles") // 👈 use the view
+        .from("public_profiles")
         .select("id,username,display_name,avatar_url")
-        .or(
-          `username.ilike.${esc}%` + // starts-with username
-          `,display_name.ilike.%${esc}%` // contains display name
-        )
+        .or(`username.ilike.${esc}%,display_name.ilike.%${esc}%`)
         .order("username", { ascending: true, nullsFirst: true })
         .limit(8);
 
@@ -92,18 +75,12 @@ export default function NavBar() {
     };
   }, [dq]);
 
-  // open dropdown whenever there’s a query
-  useEffect(() => {
-    setOpen(Boolean(q));
-  }, [q]);
+  useEffect(() => setOpen(Boolean(q)), [q]);
 
-  // close on click outside
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!boxRef.current) return;
-      if (!boxRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      if (!boxRef.current.contains(e.target as Node)) setOpen(false);
     }
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
@@ -113,7 +90,7 @@ export default function NavBar() {
     if (!u) return;
     setOpen(false);
     setQ("");
-    navigate(`/@${u}`);
+    navigate(`/u/${encodeURIComponent(u)}`); // 👈 use the alias route
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -159,7 +136,7 @@ export default function NavBar() {
           </NavLink>
         </nav>
 
-        {/* --- Search --- */}
+        {/* Search */}
         <div ref={boxRef} className="relative mx-3 hidden w-full max-w-sm md:block">
           <input
             ref={inputRef}
@@ -176,9 +153,7 @@ export default function NavBar() {
               {!loading && !hasResults && dq && (
                 <div className="px-3 py-2 text-sm text-neutral-400">No matches</div>
               )}
-              {loading && (
-                <div className="px-3 py-2 text-sm text-neutral-400">Searching…</div>
-              )}
+              {loading && <div className="px-3 py-2 text-sm text-neutral-400">Searching…</div>}
               {hasResults && (
                 <ul className="max-h-80 overflow-auto py-1">
                   {rows.map((r, i) => (
@@ -211,7 +186,7 @@ export default function NavBar() {
           )}
         </div>
 
-        {/* --- Right side --- */}
+        {/* Right side */}
         <div className="ml-auto flex items-center gap-2">
           {user ? (
             <>

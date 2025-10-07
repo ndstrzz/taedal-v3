@@ -1,21 +1,17 @@
-// src/App.tsx
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import CreateArtwork from "./pages/CreateArtwork";
 import SettingsProfile from "./pages/SettingsProfile";
-import PublicProfile from "./routes/PublicProfile"; // keep your path if that's where it lives
+import PublicProfile from "./routes/PublicProfile"; // ← keep your current import path
 import MyProfile from "./pages/MyProfile";
-import ArtworkDetail from "./pages/ArtworkDetail";   // ✅ NEW
 import NavBar from "./components/NavBar";
 import { useAuth } from "./state/AuthContext";
 
-// ---------- Route guards ----------
 function ProtectedRoute({ children }: { children: JSX.Element }) {
   const { user, loading } = useAuth();
   const loc = useLocation();
-
   if (loading) return <div className="p-8 text-neutral-400">Loading…</div>;
   if (!user) {
     const next = encodeURIComponent(loc.pathname + loc.search);
@@ -39,7 +35,6 @@ function NotFound() {
   return <div className="p-8 text-neutral-400">Not found.</div>;
 }
 
-// ---------- App ----------
 export default function App() {
   return (
     <>
@@ -65,7 +60,7 @@ export default function App() {
           }
         />
 
-        {/* Create (protected) */}
+        {/* Create */}
         <Route
           path="/create"
           element={
@@ -75,7 +70,7 @@ export default function App() {
           }
         />
 
-        {/* Settings (protected) */}
+        {/* Settings */}
         <Route
           path="/settings"
           element={
@@ -85,7 +80,7 @@ export default function App() {
           }
         />
 
-        {/* Your profile (protected) */}
+        {/* Your own profile */}
         <Route
           path="/me"
           element={
@@ -95,11 +90,9 @@ export default function App() {
           }
         />
 
-        {/* Public profile */}
+        {/* Public profile (two aliases) */}
         <Route path="/@:handle" element={<PublicProfile />} />
-
-        {/* ✅ Artwork detail */}
-        <Route path="/a/:id" element={<ArtworkDetail />} />
+        <Route path="/u/:handle" element={<PublicProfile />} />
 
         {/* Fallback */}
         <Route path="*" element={<NotFound />} />
