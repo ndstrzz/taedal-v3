@@ -21,10 +21,20 @@ type SimilarRecord = {
 
 const ACCEPT = "image/png,image/jpeg,image/webp,video/mp4";
 const MAX_MB = 25;
-const VERIFY_TIMEOUT_MS = 20_000;
 
 function fmtMB(bytes: number) {
   return (bytes / (1024 * 1024)).toFixed(1) + "MB";
+}
+
+/** Abort a fetch after ms timeout. */
+async function withTimeout<T>(ms: number, task: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(new DOMException("Timeout", "AbortError")), ms);
+  try {
+    return await task(ctrl.signal);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Downscale images client-side so /api/verify stays under serverless body limits
@@ -47,24 +57,6 @@ async function downscaleForVerify(srcFile: File, maxSide = 1024): Promise<Blob> 
     canvas.toBlob((b) => res(b || srcFile), "image/jpeg", 0.8)
   );
   return blob;
-}
-
-// Fetch with hard timeout + abort support
-async function fetchWithTimeout(
-  input: RequestInfo | URL,
-  init: RequestInit & { timeout?: number } = {}
-) {
-  const { timeout = VERIFY_TIMEOUT_MS, signal, ...rest } = init;
-  const ac = new AbortController();
-  const onAbort = () => ac.abort();
-  if (signal) signal.addEventListener("abort", onAbort, { once: true });
-  const t = setTimeout(() => ac.abort(), timeout);
-  try {
-    return await fetch(input, { ...rest, signal: ac.signal });
-  } finally {
-    clearTimeout(t);
-    if (signal) signal.removeEventListener("abort", onAbort);
-  }
 }
 
 export default function CreateArtwork() {
@@ -106,11 +98,12 @@ export default function CreateArtwork() {
     return () => clearTimeout(t);
   }, []);
 
-  // Pre-warm API (cold start guard)
+  // Pre-warm API to reduce cold start latency
   useEffect(() => {
     if (!API_BASE) return;
-    fetchWithTimeout(`${API_BASE.replace(/\/$/, "")}/api/health`, { timeout: 5000 })
-      .catch(() => void 0);
+    void withTimeout(3000, (signal) =>
+      fetch(`${API_BASE.replace(/\/$/, "")}/api/health`, { signal }).then(() => void 0)
+    ).catch(() => void 0);
   }, []);
 
   // Preview blob URL
@@ -128,11 +121,7 @@ export default function CreateArtwork() {
 
   const canSubmit = useMemo(
     () =>
-      !!file &&
-      !!title.trim() &&
-      !busy &&
-      !checking &&
-      (!mustAcknowledge || ackOriginal),
+      !!file && !!title.trim() && !busy && !checking && (!mustAcknowledge || ackOriginal),
     [file, title, busy, checking, mustAcknowledge, ackOriginal]
   );
 
@@ -143,7 +132,10 @@ export default function CreateArtwork() {
         toast({
           variant: "error",
           title: "Unsupported file type",
-          description: `Got ${f.type}. Allowed: ${ACCEPT.replaceAll("image/", "").replaceAll("video/", "")}`,
+          description: `Got ${f.type}. Allowed: ${ACCEPT.replaceAll("image/", "").replaceAll(
+            "video/",
+            ""
+          )}`,
         });
         return;
       }
@@ -171,19 +163,9 @@ export default function CreateArtwork() {
     [handleNewFile]
   );
 
-  // Used to cancel an in-flight verify if a new file arrives
-  const verifyAbortRef = useRef<AbortController | null>(null);
-
-  // Auto similarity check — robust: skip videos, downscale images, timeout + abortable
+  // Auto similarity check — robust: downscale + send both field names + timeout + retry
   useEffect(() => {
     if (!file) return;
-
-    // Skip videos for similarity (hashing is image-only)
-    if (file.type.startsWith("video/")) {
-      setCandidates([]); // allow continue
-      return;
-    }
-
     if (!API_BASE) {
       toast({
         variant: "error",
@@ -192,12 +174,6 @@ export default function CreateArtwork() {
       });
       return;
     }
-
-    // Abort previous verify if still running
-    verifyAbortRef.current?.abort();
-    const ac = new AbortController();
-    verifyAbortRef.current = ac;
-
     (async () => {
       setChecking(true);
       setCandidates(null);
@@ -205,23 +181,35 @@ export default function CreateArtwork() {
         const blob = await downscaleForVerify(file, 1024);
         const smallFile = new File([blob], file.name, { type: blob.type || file.type });
 
-        const fd = new FormData();
-        // Send BOTH names: whichever the server expects, it will find one.
-        fd.append("artwork", smallFile);
-        fd.append("file", smallFile);
+        const tryVerify = (timeoutMs: number) =>
+          withTimeout(timeoutMs, async (signal) => {
+            const fd = new FormData();
+            // Send BOTH names: whichever the server expects, it will find one.
+            fd.append("artwork", smallFile);
+            fd.append("file", smallFile);
+            const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/verify`, {
+              method: "POST",
+              body: fd,
+              signal,
+              headers: { Accept: "application/json" },
+            });
+            if (!r.ok) {
+              const text = await r.text().catch(() => "");
+              throw new Error(`Similarity check failed (${r.status}) ${text}`.trim());
+            }
+            return (await r.json()) as { similar?: SimilarRecord[]; matches?: SimilarRecord[] };
+          });
 
-        const r = await fetchWithTimeout(
-          `${API_BASE.replace(/\/$/, "")}/api/verify`,
-          { method: "POST", body: fd, headers: { Accept: "application/json" }, signal: ac.signal, timeout: VERIFY_TIMEOUT_MS }
-        );
-
-        if (!r.ok) {
-          const text = await r.text().catch(() => "");
-          throw new Error(`Similarity check failed (${r.status}) ${text}`.trim());
+        // First attempt: 14s
+        let out: { similar?: SimilarRecord[]; matches?: SimilarRecord[] } | null = null;
+        try {
+          out = await tryVerify(14000);
+        } catch (e) {
+          // Second attempt quick retry: 6s
+          out = await tryVerify(6000);
         }
 
-        const out = (await r.json()) as { similar?: SimilarRecord[]; matches?: SimilarRecord[] };
-        const results = Array.isArray(out?.similar) ? out.similar : (out?.matches || []);
+        const results = Array.isArray(out?.similar) ? out!.similar : out?.matches || [];
         setCandidates(results);
 
         if (results.length > 0) {
@@ -233,25 +221,17 @@ export default function CreateArtwork() {
           toast({ variant: "success", title: "No near-duplicates found" });
         }
       } catch (err: any) {
-        if (err?.name === "AbortError") {
-          // Swallow aborts (new file selected)
-          return;
-        }
-        const aborted = err?.name === "TimeoutError";
         toast({
           variant: "error",
-          title: err?.name === "AbortError" ? "Similarity canceled" : (aborted ? "Similarity timed out" : "Similarity check error"),
-          description: aborted ? "Server took too long. You can still continue." : String(err?.message || err),
+          title: "Similarity check skipped",
+          description: String(err?.message || err),
         });
         setCandidates([]); // allow continue
       } finally {
-        if (!ac.signal.aborted) setChecking(false);
+        setChecking(false);
       }
     })();
-
-    return () => ac.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file]);
+  }, [file, toast]);
 
   // Create → upload + metadata → open wallet modal
   const onSubmit = useCallback(
@@ -379,7 +359,7 @@ export default function CreateArtwork() {
       setBusy(false);
       navigate(`/a/${inserted.id}`, { replace: true });
     } catch (e: any) {
-      const msg = e instanceof WalletError ? e.message : (e?.message || String(e));
+      const msg = e instanceof WalletError ? e.message : e?.message || String(e);
       setMintErr(msg);
     } finally {
       setMintBusy(false);

@@ -160,18 +160,40 @@ app.post('/api/hashes', upload.single('file'), async (req, res) => {
 })
 
 // robust: accept 'artwork' OR 'file'
+// robust: accept 'artwork' OR 'file' + soft timeout so the client never waits forever
 app.post('/api/verify', upload.any(), async (req, res) => {
+  // Send an empty result after TIME_LIMIT if heavy work hasn't finished.
+  const TIME_LIMIT = 12_000;
+  let responded = false;
+  const softTimer = setTimeout(() => {
+    if (!responded && !res.headersSent) {
+      responded = true;
+      return res.json({ query: null, similar: [], matches: [] });
+    }
+  }, TIME_LIMIT);
+
   try {
     const pick = (req.files || []).find((x) => x.fieldname === 'artwork') ||
-                 (req.files || []).find((x) => x.fieldname === 'file')
+                 (req.files || []).find((x) => x.fieldname === 'file');
+
     if (!pick) {
-      console.warn('[verify] no file found in fields:', (req.files || []).map(f => f.fieldname))
-      return res.status(400).json({ error: 'No file' })
+      console.warn('[verify] no file in', (req.files || []).map(f => f.fieldname));
+      if (!responded) {
+        responded = true;
+        return res.json({ query: null, similar: [], matches: [] });
+      }
+      return;
     }
 
-    const qHash = await dhash64(pick.buffer)
+    const qHash = await dhash64(pick.buffer);
 
-    if (!sb) return res.json({ query: qHash, similar: [] })
+    if (!sb) {
+      if (!responded) {
+        responded = true;
+        return res.json({ query: qHash, similar: [], matches: [] });
+      }
+      return;
+    }
 
     const { data, error } = await sb
       .from('artworks')
@@ -179,16 +201,16 @@ app.post('/api/verify', upload.any(), async (req, res) => {
       .eq('status', 'published')
       .not('dhash64', 'is', null)
       .order('created_at', { ascending: false })
-      .limit(500)
+      .limit(500);
 
-    if (error) throw error
+    if (error) throw error;
 
-    const SIM_THRESHOLD = 0.86
+    const SIM_THRESHOLD = 0.86;
     const results = (data || [])
       .map((r) => {
-        if (!r.dhash64) return null
-        const dist = hammingHex(qHash, r.dhash64)
-        const score = 1 - dist / 64
+        if (!r.dhash64) return null;
+        const dist = hammingHex(qHash, r.dhash64);
+        const score = 1 - dist / 64;
         return {
           id: r.id,
           title: r.title || 'Untitled',
@@ -196,19 +218,28 @@ app.post('/api/verify', upload.any(), async (req, res) => {
           user_id: r.owner,
           image_url: r.cover_url,
           score,
-        }
+        };
       })
       .filter(Boolean)
       .filter((r) => r.score >= SIM_THRESHOLD)
       .sort((a, b) => b.score - a.score)
-      .slice(0, 12)
+      .slice(0, 12);
 
-    res.json({ query: qHash, similar: results, matches: results }) // both keys for compatibility
+    if (!responded) {
+      responded = true;
+      return res.json({ query: qHash, similar: results, matches: results });
+    }
   } catch (e) {
-    console.error('[verify] error', e)
-    res.status(500).json({ error: 'verify failed' })
+    console.error('[verify] error', e);
+    if (!responded) {
+      responded = true;
+      return res.json({ query: null, similar: [], matches: [] });
+    }
+  } finally {
+    clearTimeout(softTimer);
   }
-})
+});
+
 
 // ---- Start ----------------------------------------------------------------
 
