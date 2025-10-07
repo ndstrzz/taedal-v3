@@ -6,6 +6,7 @@ import { ensureProfileRow } from "../lib/profile";
 import FollowListModal from "../components/FollowListModal";
 import LikesGrid from "../components/LikesGrid";
 import CollectionsGrid from "../components/CollectionsGrid";
+import { useToast } from "../components/Toaster";
 
 type Profile = {
   id: string;
@@ -54,7 +55,7 @@ function toTwitterUrl(s?: string | null) {
   if (/^https?:\/\//i.test(t)) return t;
   return `https://twitter.com/${encodeURIComponent(t)}`;
 }
-// Simple inline icons
+// Inline icons
 const GlobeIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
     <path fill="currentColor" d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2Zm7.93 9h-3.09a15.7 15.7 0 0 0-1.15-5.01A8.03 8.03 0 0 1 19.93 11ZM12 4c.9 0 2.3 2.04 2.92 6H9.08C9.7 6.04 11.1 4 12 4ZM8.31 6a15.7 15.7 0 0 0-1.16 5H4.07A8.03 8.03 0 0 1 8.31 6ZM4.07 13h3.08c.12 1.77.5 3.5 1.16 5a8.03 8.03 0 0 1-4.24-5Zm4.99 0h6c-.62 3.96-2.02 6-3 6s-2.38-2.04-3-6Zm6.63 5c.66-1.5 1.04-3.23 1.16-5h3.08a8.03 8.03 0 0 1-4.24 5Z"/>
@@ -70,9 +71,15 @@ const XIcon = (props: React.SVGProps<SVGSVGElement>) => (
     <path fill="currentColor" d="M3 3h4.6l4.7 6.5L17.9 3H21l-7.3 9.2L21.4 21H16.8l-5-6.9L8.1 21H3l7.7-9.8L3 3Z"/>
   </svg>
 );
+const ShareIcon = (props: React.SVGProps<SVGSVGElement>) => (
+  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
+    <path fill="currentColor" d="M14 3l7 7-1.41 1.41L15 6.83V17a5 5 0 0 1-5 5H5v-2h5a3 3 0 0 0 3-3V6.83l-4.59 4.58L7 10l7-7Z"/>
+  </svg>
+);
 
 export default function MyProfile() {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [search, setSearch] = useSearchParams();
   const tab = (search.get("tab") || "artworks") as "artworks" | "likes" | "collections" | "activity";
 
@@ -151,6 +158,32 @@ export default function MyProfile() {
     [profile]
   );
 
+  const setTab = (t: typeof tab) =>
+    setSearch((s) => { const n = new URLSearchParams(s); n.set("tab", t); return n; }, { replace: true });
+
+  const webUrl = toWebUrl(profile?.website);
+  const igUrl  = toInstagramUrl(profile?.instagram);
+  const twUrl  = toTwitterUrl(profile?.twitter);
+  const hasSocial = !!(webUrl || igUrl || twUrl);
+
+  // Share handler
+  async function handleShare() {
+    if (!profile) return;
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const url = profile.username ? `${origin}/u/${profile.username}` : `${origin}/me`;
+    const title = `${displayName} on taedal`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title, text: title, url });
+      } else {
+        await navigator.clipboard.writeText(url);
+        toast({ title: "Link copied", description: "Profile URL copied to clipboard." });
+      }
+    } catch {
+      // ignore user-cancel
+    }
+  }
+
   if (!user) {
     return (
       <div className="p-8">
@@ -192,13 +225,6 @@ export default function MyProfile() {
   }
 
   const cover = profile.cover_url;
-  const setTab = (t: typeof tab) =>
-    setSearch((s) => { const n = new URLSearchParams(s); n.set("tab", t); return n; }, { replace: true });
-
-  const webUrl = toWebUrl(profile.website);
-  const igUrl  = toInstagramUrl(profile.instagram);
-  const twUrl  = toTwitterUrl(profile.twitter);
-  const hasSocial = !!(webUrl || igUrl || twUrl);
 
   return (
     <div>
@@ -245,13 +271,20 @@ export default function MyProfile() {
             )}
           </div>
 
-          <div className="mb-2 hidden md:block">
+          <div className="mb-2 hidden md:flex items-center gap-2">
             <Link
               to="/settings?from=me"
               className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900 focus:outline-none focus:ring focus:ring-border"
             >
               Edit profile
             </Link>
+            <button
+              onClick={handleShare}
+              className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900 inline-flex items-center gap-2"
+              aria-label="Share profile"
+            >
+              <ShareIcon /> Share
+            </button>
           </div>
         </div>
 
