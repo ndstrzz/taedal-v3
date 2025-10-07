@@ -136,9 +136,7 @@ export async function mintWithMetaMask(
       try {
         const parsed = c.interface.parseLog(log);
         if (parsed?.name === "ArtworkLinked" || parsed?.name === "Transfer") {
-          const id =
-            parsed.args?.tokenId?.toString?.() ??
-            parsed.args?.tokenId?.toString?.();
+          const id = parsed.args?.tokenId?.toString?.();
           if (id) {
             tokenId = id;
             break;

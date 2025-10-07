@@ -27,11 +27,12 @@ const sb =
     ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
     : null
 
-// ---- CORS (allow localhost & *.vercel.app) --------------------------------
+// ---- CORS (allow localhost & *.vercel.app & render) ----------------------
 
 const allowlist = [
   'http://localhost:5173',
   /\.vercel\.app$/i,
+  /^https?:\/\/.*onrender\.com$/i,
 ]
 
 app.use(
@@ -61,7 +62,7 @@ app.use(express.json())
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }))
 
-// ---- IPFS / Pinata --------------------------------------------------------
+// ---- Pinata: pinFile ------------------------------------------------------
 
 app.post('/api/pinata/pin-file', upload.single('file'), async (req, res) => {
   try {
@@ -99,9 +100,8 @@ app.post('/api/pinata/pin-file', upload.single('file'), async (req, res) => {
   }
 })
 
-// ---- IPFS / Pinata --------------------------------------------------------
+// ---- Pinata: pin metadata JSON -------------------------------------------
 
-// in server/index.cjs (metadata route)
 app.post('/api/metadata', async (req, res) => {
   try {
     if (!PINATA_JWT) {
@@ -115,7 +115,7 @@ app.post('/api/metadata', async (req, res) => {
         ? p.image.trim()
         : (p.imageCid ? `ipfs://${p.imageCid}` : undefined)
 
-    // NEW: allow animation_url (video/audio, etc.)
+    // accept animation_url / animationUrl / animationCid
     const animation_url =
       typeof p.animation_url === 'string' && p.animation_url.trim()
         ? p.animation_url.trim()
@@ -151,26 +151,33 @@ app.post('/api/metadata', async (req, res) => {
   }
 })
 
-
 // ---- Similarity / Hashing -------------------------------------------------
-
 app.post('/api/hashes', upload.single('file'), async (req, res) => {
   console.log('[hashes] hit', req.file?.originalname, req.file?.mimetype, req.file?.size)
   try {
     if (!req.file) return res.status(400).json({ error: 'No file' })
     const buf = req.file.buffer
-    const [dhash, sha] = await Promise.all([dhash64(buf), sha256Hex(buf)])
-    res.json({ dhash64: dhash, sha256: sha })
+
+    // sha256 is always available
+    const sha = sha256Hex(buf)
+
+    // Try dHash; if this isn't an image, sharp will fail — that's OK
+    let dhash = null
+    try {
+      dhash = await dhash64(buf)
+    } catch (e) {
+      console.warn('[hashes] dhash failed (likely non-image):', e?.message || e)
+    }
+
+    return res.json({ dhash64: dhash, sha256: sha })
   } catch (e) {
     console.error('[hashes] error', e)
-    res.status(500).json({ error: 'hashing failed' })
+    return res.status(500).json({ error: 'hashing failed' })
   }
 })
 
-// robust: accept 'artwork' OR 'file'
-// robust: accept 'artwork' OR 'file' + soft timeout so the client never waits forever
+// robust: accept 'artwork' OR 'file' + soft timeout
 app.post('/api/verify', upload.any(), async (req, res) => {
-  // Send an empty result after TIME_LIMIT if heavy work hasn't finished.
   const TIME_LIMIT = 12_000;
   let responded = false;
   const softTimer = setTimeout(() => {
@@ -247,7 +254,6 @@ app.post('/api/verify', upload.any(), async (req, res) => {
     clearTimeout(softTimer);
   }
 });
-
 
 // ---- Start ----------------------------------------------------------------
 

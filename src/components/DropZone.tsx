@@ -2,10 +2,10 @@ import React, { useCallback, useRef, useState } from "react";
 
 type Props = {
   onSelect: (file: File) => void;
-  accept?: string;            // e.g. "image/png,image/jpeg"
+  accept?: string;
   disabled?: boolean;
   className?: string;
-  children?: React.ReactNode; // optional: custom inner content
+  children?: React.ReactNode;
   ariaLabel?: string;
 };
 
@@ -29,30 +29,35 @@ export default function DropZone({
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const f = e.target.files?.[0];
       if (f) onSelect(f);
-      // reset so the same file can be re-picked later
       e.currentTarget.value = "";
     },
     [onSelect]
   );
 
-  const onDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    if (disabled) return;
-    setDragOver(true);
-  }, [disabled]);
+  const onDragOver = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      if (disabled) return;
+      setDragOver(true);
+    },
+    [disabled]
+  );
 
   const onDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
   }, []);
 
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    if (disabled) return;
-    const f = e.dataTransfer.files?.[0];
-    if (f) onSelect(f);
-  }, [disabled, onSelect]);
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOver(false);
+      if (disabled) return;
+      const f = e.dataTransfer.files?.[0];
+      if (f) onSelect(f);
+    },
+    [disabled, onSelect]
+  );
 
   return (
     <div
@@ -76,7 +81,6 @@ export default function DropZone({
         className,
       ].join(" ")}
     >
-      {/* Hidden input for browsing */}
       <input
         ref={inputRef}
         type="file"

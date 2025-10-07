@@ -37,7 +37,6 @@ export default function MintWalletModal({
             </div>
           </button>
 
-          {/* other wallets (disabled for now) */}
           {["Coinbase Wallet", "WalletConnect", "Rainbow"].map((name) => (
             <div
               key={name}

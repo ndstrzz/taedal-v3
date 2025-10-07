@@ -17,7 +17,7 @@
   },
   "scripts": {
     "build": "echo \"no build step for API\"",
-    "start": "node index.cjs"
+    "start": "node index.js"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"

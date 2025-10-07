@@ -1,4 +1,3 @@
-// server/utils/similarity.cjs
 const sharp = require('sharp')
 const crypto = require('crypto')
 
