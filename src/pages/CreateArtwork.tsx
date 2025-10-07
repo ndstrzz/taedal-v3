@@ -205,16 +205,25 @@ export default function CreateArtwork() {
       setPendingDHash(dhash64 || "");
       setPendingSha256(sha256 || "");
 
-      // 4) metadata
+      // 4) metadata  ✨ now includes properties.royalty_bps + license
       const body: any = {
         name: title.trim(),
         description: description.trim(),
         attributes: attributes?.length ? attributes : undefined,
+        properties: {
+          royalty_bps: Math.max(0, Math.min(10000, Number(royaltyBps || 0))),
+          license: license || "All Rights Reserved",
+        },
       };
+
       if (isVideo) {
-        body.image = posterGateway ? posterGateway.replace("https://gateway.pinata.cloud/ipfs/","ipfs://") : undefined;
-        body.animationCid = mediaCid;
+        // image = poster (as ipfs://...), animation_url = actual video ipfs://
+        body.image = posterGateway
+          ? posterGateway.replace("https://gateway.pinata.cloud/ipfs/","ipfs://")
+          : undefined;
+        body.animation_url = `ipfs://${mediaCid}`;
       } else {
+        // pinata route prefers image or imageCid; we keep imageCid for compatibility with your API handler
         body.imageCid = mediaCid;
       }
 
@@ -237,7 +246,7 @@ export default function CreateArtwork() {
       toast({ variant: "error", title: "Create failed", description: String(err.message || err) });
       setBusy(false); setProgress(0);
     }
-  }, [user, file, isVideo, posterBlob, title, description, attributes, toast]);
+  }, [user, file, isVideo, posterBlob, title, description, attributes, license, royaltyBps, toast]);
 
   // Save draft (no mint)
   const onSaveDraft = useCallback(async () => {
