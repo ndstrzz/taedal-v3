@@ -3,6 +3,9 @@ import { Link, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useToast } from "../components/Toaster";
 import { useAuth } from "../state/AuthContext";
+// add import
+import FollowButton from "../components/FollowButton";
+
 
 type Profile = {
   id: string;
@@ -240,18 +243,25 @@ export default function PublicProfile() {
           </div>
 
           {showFollow && (
-            <button
-              onClick={toggleFollow}
-              disabled={followBusy}
-              className={`mb-2 rounded-xl px-3 py-1.5 text-sm border ${
-                isFollowing
-                  ? "border-neutral-600 bg-neutral-800 hover:bg-neutral-700"
-                  : "border-neutral-700 hover:bg-neutral-900"
-              }`}
-            >
-              {followBusy ? "…" : isFollowing ? "Following" : "Follow"}
-            </button>
-          )}
+  <FollowButton
+    targetId={profile.id}
+    onToggled={async () => {
+      // refresh counts from the view after each toggle
+      const { data } = await supabase
+        .from("profile_counts")
+        .select("posts,followers,following")
+        .eq("user_id", profile.id)
+        .maybeSingle();
+      setCounts({
+        posts: data?.posts ?? 0,
+        followers: data?.followers ?? 0,
+        following: data?.following ?? 0,
+      });
+    }}
+    className="mb-2"
+  />
+)}
+
         </div>
 
         {/* Stats */}
