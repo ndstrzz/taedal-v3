@@ -17,6 +17,9 @@ type Profile = {
   bio: string | null;
   avatar_url: string | null;
   cover_url: string | null;
+  website?: string | null;
+  instagram?: string | null; // could be handle or URL
+  twitter?: string | null;   // could be handle or URL
 };
 
 type Artwork = {
@@ -32,6 +35,52 @@ type Badge = { kind: string; label: string };
 
 const PAGE_SIZE = 12;
 const ipfs = (cid?: string | null) => (cid ? `https://ipfs.io/ipfs/${cid}` : "");
+
+// ------- Small SVG icon buttons (inline to avoid extra deps)
+function GlobeIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
+      <path fill="currentColor" d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2Zm7.93 9h-3.09a15.7 15.7 0 0 0-1.15-5.01A8.03 8.03 0 0 1 19.93 11ZM12 4c.9 0 2.3 2.04 2.92 6H9.08C9.7 6.04 11.1 4 12 4ZM8.31 6a15.7 15.7 0 0 0-1.16 5H4.07A8.03 8.03 0 0 1 8.31 6ZM4.07 13h3.08c.12 1.77.5 3.5 1.16 5a8.03 8.03 0 0 1-4.24-5Zm4.99 0h6c-.62 3.96-2.02 6-3 6s-2.38-2.04-3-6Zm6.63 5c.66-1.5 1.04-3.23 1.16-5h3.08a8.03 8.03 0 0 1-4.24 5Z"/>
+    </svg>
+  );
+}
+function IgIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
+      <path fill="currentColor" d="M7 2h10a5 5 0 0 1 5 5v10a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V7a5 5 0 0 1 5-5Zm0 2a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3H7Zm5 3a6 6 0 1 1 0 12 6 6 0 0 1 0-12Zm0 2.5A3.5 3.5 0 1 0 12 17a3.5 3.5 0 0 0 0-7.5ZM18 6.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/>
+    </svg>
+  );
+}
+function XIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
+      <path fill="currentColor" d="M3 3h4.6l4.7 6.5L17.9 3H21l-7.3 9.2L21.4 21H16.8l-5-6.9L8.1 21H3l7.7-9.8L3 3Z"/>
+    </svg>
+  );
+}
+// Build URLs from either a full URL or a handle like "@name" / "name"
+function toWebUrl(s?: string | null) {
+  if (!s) return null;
+  const t = s.trim();
+  if (!t) return null;
+  if (/^https?:\/\//i.test(t)) return t;
+  return `https://${t}`;
+}
+function toInstagramUrl(s?: string | null) {
+  if (!s) return null;
+  const t = s.trim().replace(/^@/, "");
+  if (!t) return null;
+  if (/^https?:\/\//i.test(t)) return t;
+  return `https://instagram.com/${encodeURIComponent(t)}`;
+}
+function toTwitterUrl(s?: string | null) {
+  if (!s) return null;
+  const t = s.trim().replace(/^@/, "");
+  if (!t) return null;
+  if (/^https?:\/\//i.test(t)) return t;
+  return `https://twitter.com/${encodeURIComponent(t)}`;
+}
+// -------------------------------------------------------------------------
 
 export default function PublicProfile() {
   const params = useParams();
@@ -64,7 +113,7 @@ export default function PublicProfile() {
 
       const { data, error } = await supabase
         .from("profiles")
-        .select("id,username,display_name,bio,avatar_url,cover_url")
+        .select("id,username,display_name,bio,avatar_url,cover_url,website,instagram,twitter")
         .eq("username", username)
         .maybeSingle();
 
@@ -88,7 +137,6 @@ export default function PublicProfile() {
         .maybeSingle();
       setCounts({ posts: c?.posts ?? 0, followers: c?.followers ?? 0, following: c?.following ?? 0 });
 
-      // 1) Try row-per-badge view: (user_id, kind, label)
       const { data: b1, error: e1 } = await supabase
         .from("profile_badges")
         .select("kind,label")
@@ -99,7 +147,6 @@ export default function PublicProfile() {
         return;
       }
 
-      // 2) Fallback to boolean table: (verified, staff, top_seller)
       const { data: b2 } = await supabase
         .from("profile_badges")
         .select("verified,staff,top_seller")
@@ -151,6 +198,12 @@ export default function PublicProfile() {
     () => profile?.display_name || (profile?.username ? `@${profile.username}` : "Artist"),
     [profile]
   );
+
+  // Social buttons
+  const webUrl = useMemo(() => toWebUrl(profile?.website), [profile?.website]);
+  const igUrl = useMemo(() => toInstagramUrl(profile?.instagram), [profile?.instagram]);
+  const twUrl = useMemo(() => toTwitterUrl(profile?.twitter), [profile?.twitter]);
+  const hasSocial = !!(webUrl || igUrl || twUrl);
 
   // SEO
   useEffect(() => {
@@ -241,6 +294,30 @@ export default function PublicProfile() {
             )}
 
             {profile.bio && <p className="mt-2 max-w-3xl text-neutral-300">{profile.bio}</p>}
+
+            {/* Social links */}
+            {hasSocial && (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {webUrl && (
+                  <a href={webUrl} target="_blank" rel="me noopener noreferrer"
+                     className="inline-flex items-center gap-2 rounded-full border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-900">
+                    <GlobeIcon /> Website
+                  </a>
+                )}
+                {igUrl && (
+                  <a href={igUrl} target="_blank" rel="me noopener noreferrer"
+                     className="inline-flex items-center gap-2 rounded-full border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-900">
+                    <IgIcon /> Instagram
+                  </a>
+                )}
+                {twUrl && (
+                  <a href={twUrl} target="_blank" rel="me noopener noreferrer"
+                     className="inline-flex items-center gap-2 rounded-full border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-900">
+                    <XIcon /> X (Twitter)
+                  </a>
+                )}
+              </div>
+            )}
           </div>
 
           {showFollow && (
