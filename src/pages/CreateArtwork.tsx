@@ -50,15 +50,15 @@ export default function CreateArtwork() {
   const [mintBusy, setMintBusy] = useState(false);
   const [mintErr, setMintErr] = useState<string | null>(null);
 
-  // values carried into mint step
-  const [pendingMetaUrl, setPendingMetaUrl] = useState<string>("");     // ipfs://...
-  const [pendingImageCid, setPendingImageCid] = useState<string>("");   // raw CID
-  const [pendingCoverUrl, setPendingCoverUrl] = useState<string>("");   // HTTP gateway URL
+  // values for DB insert after mint
+  const [pendingMetaUrl, setPendingMetaUrl] = useState<string>("");
+  const [pendingImageCid, setPendingImageCid] = useState<string>("");
+  const [pendingCoverUrl, setPendingCoverUrl] = useState<string>("");
   const [pendingArtworkNum, setPendingArtworkNum] = useState<number | null>(null);
-  const [pendingDHash, setPendingDHash] = useState<string>("");         // for DB insert
-  const [pendingSha256, setPendingSha256] = useState<string>("");       // for DB insert
+  const [pendingDHash, setPendingDHash] = useState<string>("");
+  const [pendingSha256, setPendingSha256] = useState<string>("");
 
-  // skeleton for first mount
+  // skeleton
   const [initializing, setInitializing] = useState(true);
   useEffect(() => {
     const t = setTimeout(() => setInitializing(false), 200);
@@ -123,7 +123,7 @@ export default function CreateArtwork() {
     [handleNewFile]
   );
 
-  // Auto similarity check — NOTE: send as "artwork"
+  // Auto similarity check — send field name "artwork"
   useEffect(() => {
     if (!file) return;
     if (!API_BASE) {
@@ -139,14 +139,14 @@ export default function CreateArtwork() {
       setCandidates(null);
       try {
         const fd = new FormData();
-        fd.append("artwork", file); // <-- important
+        fd.append("artwork", file); // IMPORTANT
         const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/verify`, {
           method: "POST",
           body: fd,
         });
         if (!r.ok) throw new Error(`Similarity check failed (${r.status})`);
-        const out = (await r.json()) as { similar?: SimilarRecord[] };
-        const results = Array.isArray(out?.similar) ? out.similar : [];
+        const out = (await r.json()) as { similar?: SimilarRecord[]; matches?: SimilarRecord[] };
+        const results = Array.isArray(out?.similar) ? out.similar : (out?.matches || []);
         setCandidates(results);
         if (results.length > 0) {
           toast({
@@ -162,7 +162,7 @@ export default function CreateArtwork() {
           title: "Similarity check error",
           description: String(err.message || err),
         });
-        setCandidates([]); // allow proceed even if check fails
+        setCandidates([]); // allow continue
       } finally {
         setChecking(false);
       }
@@ -206,11 +206,10 @@ export default function CreateArtwork() {
         setProgress(100);
         toast({ variant: "success", title: "Pinned media to IPFS" });
 
-        // save for later insert
         setPendingImageCid(pin.cid);
         setPendingCoverUrl(pin.gatewayUrl || DEFAULT_COVER_URL);
 
-        // 2) Hashes — store for insert
+        // 2) Hashes — store for DB insert
         const fd1 = new FormData();
         fd1.append("file", file);
         const r1 = await fetch(`${API_BASE.replace(/\/$/, "")}/api/hashes`, {
@@ -223,16 +222,15 @@ export default function CreateArtwork() {
         setPendingSha256(sha256 || "");
         toast({ title: "Computed hashes", description: "Perceptual + SHA256" });
 
-        // 3) Metadata
-        const metadata = {
-          name: title.trim(),
-          description: description.trim(),
-          imageCid: pin.cid,
-        };
+        // 3) Metadata (just name/desc/imageCid)
         const r2 = await fetch(`${API_BASE.replace(/\/$/, "")}/api/metadata`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(metadata),
+          body: JSON.stringify({
+            name: title.trim(),
+            description: description.trim(),
+            imageCid: pin.cid,
+          }),
         });
         if (!r2.ok) throw new Error(`Failed to pin metadata (${r2.status})`);
         const metaOut = await r2.json();
@@ -242,9 +240,8 @@ export default function CreateArtwork() {
           `ipfs://${metaOut?.metadata_cid}`;
         toast({ variant: "success", title: "Pinned metadata" });
 
-        // 4) Prepare mint
         setPendingMetaUrl(metadataUri);
-        setPendingArtworkNum(Math.floor(Date.now() / 1000)); // numeric tag for mintWithURI
+        setPendingArtworkNum(Math.floor(Date.now() / 1000));
         setMintErr(null);
         setMintOpen(true);
       } catch (err: any) {
@@ -260,7 +257,7 @@ export default function CreateArtwork() {
     [user, file, title, description, toast]
   );
 
-  // Mint via MetaMask then insert DB row (now includes hashes)
+  // Mint via MetaMask, then insert DB row (now includes hashes)
   async function handleMintWithMetaMask() {
     try {
       setMintBusy(true);

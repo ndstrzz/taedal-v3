@@ -1,6 +1,5 @@
-// src/routes/PublicProfile.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useToast } from "../components/Toaster";
 import { useAuth } from "../state/AuthContext";
@@ -29,7 +28,6 @@ export default function PublicProfile() {
   const { handle = "" } = useParams();
   const username = handle.replace(/^@/, "");
   const { toast } = useToast();
-  const navigate = useNavigate();
   const { user } = useAuth();
 
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -41,60 +39,33 @@ export default function PublicProfile() {
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  // Fetch profile by username with fallback to a public view if present.
+  // Fetch profile by username
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
       setErr(null);
-      try {
-        // 1) primary table
-        let { data, error } = await supabase
-          .from("profiles")
-          .select("id,username,display_name,bio,avatar_url,cover_url")
-          .eq("username", username)
-          .maybeSingle();
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("username", username)
+        .maybeSingle();
 
-        // 2) optional safe view
-        if ((!data || error) && !cancelled) {
-          const alt = await supabase
-            .from("public_profiles") // create this view if you use it; otherwise this returns error which we ignore
-            .select("id,username,display_name,bio,avatar_url,cover_url")
-            .eq("username", username)
-            .maybeSingle();
-          if (alt.data) data = alt.data as any;
-        }
-
-        if (cancelled) return;
-
-        if (!data) {
-          // If the viewer is likely the owner, take them to settings to set up a profile.
-          const viewerHandle = user?.user_metadata?.username as string | undefined;
-          if (viewerHandle && viewerHandle === username) {
-            navigate("/settings", { replace: true });
-            return;
-          }
-          setErr("User not found");
-          setProfile(null);
-        } else {
-          setProfile(data as Profile);
-        }
-      } catch (e: any) {
-        if (!cancelled) {
-          setErr(e?.message || "Failed to load profile");
-          setProfile(null);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
+      if (cancelled) return;
+      if (error || !data) {
+        setErr(error?.message || "notfound");
+        setProfile(null);
+        setLoading(false);
+        return;
       }
+      setProfile(data as Profile);
+      setLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [username]);
 
-  // Load a page of published artworks for this profile
   async function loadMore() {
     if (!profile) return;
     setLoadingMore(true);
@@ -110,15 +81,10 @@ export default function PublicProfile() {
       .range(from, to);
 
     if (error) {
-      toast({
-        variant: "error",
-        title: "Couldn’t load artworks",
-        description: error.message,
-      });
+      toast({ variant: "error", title: "Couldn’t load artworks", description: error.message });
       setLoadingMore(false);
       return;
     }
-
     const rows = (data || []) as Artwork[];
     setArtworks((prev) => [...prev, ...rows]);
     setPage((p) => p + 1);
@@ -127,7 +93,6 @@ export default function PublicProfile() {
     setLoadingMore(false);
   }
 
-  // Reset grid when profile changes
   useEffect(() => {
     setArtworks([]);
     setPage(0);
@@ -140,20 +105,29 @@ export default function PublicProfile() {
   }, [profile?.id]);
 
   const displayName = useMemo(
-    () =>
-      profile?.display_name ||
-      (profile?.username ? `@${profile.username}` : "Artist"),
+    () => profile?.display_name || (profile?.username ? `@${profile.username}` : "Artist"),
     [profile]
   );
 
   if (loading) {
     return <div className="p-8 text-neutral-400">Loading profile…</div>;
   }
-  if (err) {
-    return <div className="p-8 text-red-400">{err}</div>;
-  }
+
+  // Not found UX: suggest settings if this *might* be the owner
   if (!profile) {
-    return <div className="p-8 text-neutral-400">Profile not found.</div>;
+    return (
+      <div className="p-8">
+        <div className="mb-2 text-neutral-400">Profile “@{username}” not found.</div>
+        {user && (
+          <Link
+            to="/settings"
+            className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900"
+          >
+            Go to settings to set your username
+          </Link>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -171,7 +145,7 @@ export default function PublicProfile() {
       </div>
 
       {/* Header */}
-      <div className="mx-auto max-w-6xl px-4 -mt-12">
+      <div className="mx-auto -mt-12 max-w-6xl px-4">
         <div className="flex items-end gap-4">
           <img
             src={profile.avatar_url || "/brand/taedal-logo.svg"}
@@ -185,9 +159,7 @@ export default function PublicProfile() {
             )}
           </div>
         </div>
-        {profile.bio && (
-          <p className="mt-4 max-w-3xl text-neutral-300">{profile.bio}</p>
-        )}
+        {profile.bio && <p className="mt-4 max-w-3xl text-neutral-300">{profile.bio}</p>}
       </div>
 
       {/* Artworks grid */}
@@ -198,7 +170,7 @@ export default function PublicProfile() {
           <div className="text-neutral-400">No published artworks yet.</div>
         )}
 
-        <ul className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+        <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
           {artworks.map((a) => {
             const img = a.cover_url || ipfs(a.image_cid);
             return (
@@ -213,7 +185,7 @@ export default function PublicProfile() {
                         loading="lazy"
                       />
                     ) : (
-                      <div className="h-full w-full grid place-items-center text-neutral-500 text-sm">
+                      <div className="grid h-full w-full place-items-center text-sm text-neutral-500">
                         No image
                       </div>
                     )}
