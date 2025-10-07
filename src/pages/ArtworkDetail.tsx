@@ -14,7 +14,6 @@ type ArtworkRow = {
   token_id: string | null;
   owner: string;
   created_at: string;
-  // join
   profiles?: {
     username: string | null;
     display_name: string | null;
@@ -37,7 +36,6 @@ export default function ArtworkDetail() {
     (async () => {
       setLoading(true);
       setErr(null);
-
       const { data, error } = await supabase
         .from("artworks")
         .select(
@@ -49,35 +47,25 @@ export default function ArtworkDetail() {
       if (cancelled) return;
       setLoading(false);
 
-      if (error) {
-        setErr(error.message);
-        setArt(null);
-        return;
-      }
-      if (!data) {
-        setErr("Not found.");
-        setArt(null);
-        return;
-      }
+      if (error) { setErr(error.message); return; }
+      if (!data) { setErr("Not found."); return; }
       setArt(data as unknown as ArtworkRow);
     })();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [id]);
 
   const image = useMemo(() => art?.cover_url || ipfsUrl(art?.image_cid), [art]);
 
-  // SEO — when artwork is loaded
+  // SEO
   useEffect(() => {
     if (!art) return;
     const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const title = art.title || "Untitled artwork";
     updateSEO({
-      title: `${art.title || "Untitled"} | taedal`,
+      title: `${title} | taedal`,
       description: art.description || "Artwork on taedal",
       image: image || `${origin}/brand/og-default.jpg`,
-      url: `${origin}/a/${encodeURIComponent(art.id)}`,
+      url: `${origin}/a/${art.id}`,
       type: "article",
     });
   }, [art, image]);
@@ -86,20 +74,16 @@ export default function ArtworkDetail() {
   if (err) return <div className="p-8 text-neutral-400">{err}</div>;
   if (!art) return <div className="p-8 text-neutral-400">Not found.</div>;
 
-  const ownerName =
-    art.profiles?.display_name ||
-    (art.profiles?.username ? `@${art.profiles.username}` : "Creator");
+  const ownerName = art.profiles?.display_name || (art.profiles?.username ? `@${art.profiles.username}` : "Creator");
 
   return (
     <div className="mx-auto max-w-5xl p-6">
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-900">
           {image ? (
-            <img src={image} className="w-full object-cover" alt={art.title ?? ""} />
+            <img src={image} className="w-full object-cover" />
           ) : (
-            <div className="grid aspect-square w-full place-items-center text-neutral-500">
-              No image
-            </div>
+            <div className="grid aspect-square w-full place-items-center text-neutral-500">No image</div>
           )}
         </div>
 
@@ -109,43 +93,28 @@ export default function ArtworkDetail() {
           <div className="flex items-center gap-3">
             <img
               src={art.profiles?.avatar_url || "/brand/taedal-logo.svg"}
-              className="h-10 w-10 rounded-full object-cover bg-neutral-900"
-              alt=""
+              className="h-10 w-10 rounded-full object-cover"
             />
             <div>
               <div className="text-sm text-neutral-300">{ownerName}</div>
               {art.profiles?.username && (
-                <Link
-                  to={`/@${art.profiles.username}`}
-                  className="text-xs text-neutral-400 underline"
-                >
+                <Link to={`/@${art.profiles.username}`} className="text-xs text-neutral-400 underline">
                   @{art.profiles.username}
                 </Link>
               )}
             </div>
           </div>
 
-          {art.description ? (
-            <p className="whitespace-pre-line text-neutral-300">{art.description}</p>
-          ) : (
-            <p className="text-neutral-400">No description provided.</p>
-          )}
+          {art.description && <p className="whitespace-pre-line text-neutral-300">{art.description}</p>}
 
           <div className="space-y-1 text-sm text-neutral-400">
             {art.token_id && (
-              <div>
-                Token ID: <span className="text-neutral-200">{art.token_id}</span>
-              </div>
+              <div>Token ID: <span className="text-neutral-200">{art.token_id}</span></div>
             )}
             {art.tx_hash && (
               <div className="truncate">
                 tx:{" "}
-                <a
-                  className="underline"
-                  href={`https://sepolia.etherscan.io/tx/${art.tx_hash}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
+                <a className="underline" href={`https://sepolia.etherscan.io/tx/${art.tx_hash}`} target="_blank" rel="noreferrer">
                   {art.tx_hash}
                 </a>
               </div>
@@ -155,11 +124,9 @@ export default function ArtworkDetail() {
                 metadata:{" "}
                 <a
                   className="underline"
-                  href={
-                    art.metadata_url.startsWith("ipfs://")
-                      ? art.metadata_url.replace("ipfs://", "https://ipfs.io/ipfs/")
-                      : art.metadata_url
-                  }
+                  href={art.metadata_url.startsWith("ipfs://")
+                    ? art.metadata_url.replace("ipfs://", "https://ipfs.io/ipfs/")
+                    : art.metadata_url}
                   target="_blank"
                   rel="noreferrer"
                 >

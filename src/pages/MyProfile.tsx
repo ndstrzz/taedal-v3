@@ -5,6 +5,8 @@ import { supabase } from "../lib/supabase";
 import { ensureProfileRow } from "../lib/profile";
 import FollowListModal from "../components/FollowListModal";
 import LikesGrid from "../components/LikesGrid";
+import CollectionsGrid from "../components/CollectionsGrid";
+import EditProfileInline from "../components/EditProfileInline";
 
 type Profile = {
   id: string;
@@ -13,6 +15,9 @@ type Profile = {
   bio: string | null;
   avatar_url: string | null;
   cover_url: string | null;
+  website?: string | null;
+  instagram?: string | null;
+  twitter?: string | null;
 };
 
 type Artwork = {
@@ -31,7 +36,7 @@ const ipfs = (cid?: string | null) => (cid ? `https://ipfs.io/ipfs/${cid}` : "")
 export default function MyProfile() {
   const { user } = useAuth();
   const [search, setSearch] = useSearchParams();
-  const tab = (search.get("tab") || "art") as "art" | "likes";
+  const tab = (search.get("tab") || "artworks") as "artworks" | "likes" | "collections" | "activity" | "edit";
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
@@ -44,7 +49,6 @@ export default function MyProfile() {
 
   const [showModal, setShowModal] = useState<null | "followers" | "following">(null);
 
-  // Ensure row exists, then load it
   useEffect(() => {
     (async () => {
       if (!user) return;
@@ -52,7 +56,7 @@ export default function MyProfile() {
       setLoadingProfile(true);
       const { data, error } = await supabase
         .from("profiles")
-        .select("id,username,display_name,bio,avatar_url,cover_url")
+        .select("id,username,display_name,bio,avatar_url,cover_url,website,instagram,twitter")
         .eq("id", user.id)
         .maybeSingle();
       if (!error) setProfile((data as Profile) || null);
@@ -60,7 +64,6 @@ export default function MyProfile() {
     })();
   }, [user]);
 
-  // counts via view (profile_counts)
   useEffect(() => {
     if (!profile) return;
     (async () => {
@@ -103,11 +106,8 @@ export default function MyProfile() {
     setHasMore(from + rows.length < total);
   }
 
-  // reset pagination when profile changes
   useEffect(() => {
-    setArtworks([]);
-    setPage(0);
-    setHasMore(true);
+    setArtworks([]); setPage(0); setHasMore(true);
     if (profile) loadMore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.id]);
@@ -121,14 +121,11 @@ export default function MyProfile() {
     return (
       <div className="p-8">
         <p className="mb-4 text-neutral-300">Please log in to view your profile.</p>
-        <Link to="/login" className="underline">
-          Go to log in
-        </Link>
+        <Link to="/login" className="underline">Go to log in</Link>
       </div>
     );
   }
 
-  // Skeleton header while the profile loads
   if (loadingProfile) {
     return (
       <div>
@@ -161,21 +158,15 @@ export default function MyProfile() {
   }
 
   const cover = profile.cover_url;
+  const isOwner = true;
+  const setTab = (t: typeof tab) => setSearch((s) => { const n = new URLSearchParams(s); n.set("tab", t); return n; }, { replace: true });
 
   return (
     <div>
-      {/* Cover with nice fallback gradient */}
-      <div
-        className={`h-48 w-full ${
-          cover
-            ? ""
-            : "bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-neutral-900 via-neutral-900 to-neutral-950"
-        }`}
-      >
+      <div className={`h-48 w-full ${cover ? "" : "bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-neutral-900 via-neutral-900 to-neutral-950"}`}>
         {cover && <img src={cover} alt="" className="h-48 w-full object-cover" />}
       </div>
 
-      {/* Header */}
       <div className="mx-auto -mt-12 max-w-6xl px-4">
         <div className="flex items-end gap-4">
           <img
@@ -186,58 +177,46 @@ export default function MyProfile() {
           <div className="flex-1 pb-2">
             <div className="text-2xl font-semibold">{displayName}</div>
             {profile.username && <div className="text-sm text-neutral-400">@{profile.username}</div>}
-            {profile.bio && (
-              <p className="mt-2 max-w-2xl text-neutral-300 line-clamp-3">{profile.bio}</p>
-            )}
+            {profile.bio && <p className="mt-2 max-w-2xl text-neutral-300 line-clamp-3">{profile.bio}</p>}
           </div>
 
-          <Link
-            to="/settings"
-            className="mb-2 rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900 focus:outline-none focus:ring focus:ring-border"
-          >
-            Edit profile
-          </Link>
-        </div>
-
-        {/* Stats */}
-        <div className="mt-6 flex gap-6 text-sm">
-          <div>
-            <span className="font-semibold">{counts.posts}</span> posts
-          </div>
-          <button
-            className="text-left hover:underline rounded focus:outline-none focus:ring focus:ring-border"
-            onClick={() => setShowModal("followers")}
-          >
-            <span className="font-semibold">{counts.followers}</span> followers
-          </button>
-          <button
-            className="text-left hover:underline rounded focus:outline-none focus:ring focus:ring-border"
-            onClick={() => setShowModal("following")}
-          >
-            <span className="font-semibold">{counts.following}</span> following
-          </button>
-        </div>
-
-        {/* Tabs */}
-        <div className="mt-6 flex gap-2">
-          {[
-            { k: "art", label: "Artworks" },
-            { k: "likes", label: "Likes" },
-          ].map((t) => (
+          <div className="mb-2 hidden md:block">
             <button
-              key={t.k}
-              onClick={() => setSearch({ tab: t.k })}
-              className={`rounded-full border px-3 py-1 text-sm ${
-                tab === (t.k as any) ? "border-neutral-400 bg-neutral-800" : "border-neutral-700 hover:bg-neutral-900"
-              }`}
+              onClick={() => setTab("edit")}
+              className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900 focus:outline-none focus:ring focus:ring-border"
             >
-              {t.label}
+              Edit profile
             </button>
-          ))}
+          </div>
+        </div>
+
+        <div className="mt-6 flex flex-wrap items-end justify-between gap-4">
+          <div className="flex gap-6 text-sm">
+            <div><span className="font-semibold">{counts.posts}</span> posts</div>
+            <button className="text-left hover:underline rounded focus:outline-none focus:ring focus:ring-border" onClick={() => setShowModal("followers")}>
+              <span className="font-semibold">{counts.followers}</span> followers
+            </button>
+            <button className="text-left hover:underline rounded focus:outline-none focus:ring focus:ring-border" onClick={() => setShowModal("following")}>
+              <span className="font-semibold">{counts.following}</span> following
+            </button>
+          </div>
+
+          <div className="flex gap-2">
+            {(["artworks","likes","collections","activity","edit"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`rounded-full border px-3 py-1.5 text-sm capitalize ${
+                  tab === t ? "border-neutral-500" : "border-neutral-700 hover:bg-neutral-900"
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* Modal */}
       {profile && showModal && (
         <FollowListModal
           open
@@ -248,9 +227,8 @@ export default function MyProfile() {
         />
       )}
 
-      {/* Body */}
       <div className="mx-auto max-w-6xl px-4 py-8">
-        {tab === "art" && (
+        {tab === "artworks" && (
           <>
             <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
               {artworks.map((a) => {
@@ -267,14 +245,10 @@ export default function MyProfile() {
                             loading="lazy"
                           />
                         ) : (
-                          <div className="grid h-full w-full place-items-center text-sm text-neutral-500">
-                            No image
-                          </div>
+                          <div className="grid h-full w-full place-items-center text-sm text-neutral-500">No image</div>
                         )}
                       </div>
-                      <div className="mt-2 truncate text-sm text-neutral-200">
-                        {a.title || "Untitled"}
-                      </div>
+                      <div className="mt-2 truncate text-sm text-neutral-200">{a.title || "Untitled"}</div>
                     </Link>
                   </li>
                 );
@@ -292,19 +266,30 @@ export default function MyProfile() {
                 </button>
               </div>
             )}
-
-            {!hasMore && artworks.length === 0 && (
-              <div className="rounded-xl border border-neutral-800 p-6 text-neutral-300">
-                <div className="mb-2">No published artworks yet.</div>
-                <Link to="/create" className="underline">
-                  Upload your first artwork
-                </Link>
-              </div>
-            )}
           </>
         )}
 
         {tab === "likes" && <LikesGrid profileId={profile.id} />}
+
+        {tab === "collections" && <CollectionsGrid ownerId={profile.id} isOwner={true} />}
+
+        {tab === "activity" && <div className="text-neutral-400">Activity feed coming soon.</div>}
+
+        {tab === "edit" && (
+          <EditProfileInline
+            userId={profile.id}
+            initial={profile}
+            onSaved={async () => {
+              // refresh quick
+              const { data } = await supabase
+                .from("profiles")
+                .select("id,username,display_name,bio,avatar_url,cover_url,website,instagram,twitter")
+                .eq("id", user!.id)
+                .maybeSingle();
+              setProfile((data as Profile) || profile);
+            }}
+          />
+        )}
       </div>
     </div>
   );

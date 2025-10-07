@@ -1,67 +1,68 @@
 // src/lib/seo.ts
-type SEOArgs = {
+export type SEO = {
   title?: string;
   description?: string;
   image?: string;
   url?: string;
-  type?: "website" | "article" | "profile" | string;
-  twitterCard?: "summary" | "summary_large_image";
+  type?: "website" | "profile" | "article";
+  canonical?: string;
 };
 
-function upsertMeta(selector: string, attr: "content" | "href", value: string) {
-  if (!value) return;
-  let el = document.head.querySelector<HTMLMetaElement>(selector);
-  if (!el) {
-    if (selector.startsWith('meta[')) {
-      el = document.createElement("meta");
-      // pull the key from selector e.g. meta[name="description"]
-      const m = selector.match(/meta\[(name|property)=\"([^\"]+)\"\]/);
-      if (m) el.setAttribute(m[1], m[2]);
-      document.head.appendChild(el);
-    } else if (selector.startsWith('link[')) {
-      const link = document.createElement("link");
-      const m = selector.match(/link\[(rel)=\"([^\"]+)\"\]/);
-      if (m) link.setAttribute(m[1], m[2]);
-      document.head.appendChild(link);
-      (el as any) = link;
+export function updateSEO(meta: SEO) {
+  const d = document;
+
+  if (meta.title) {
+    d.title = meta.title;
+    setMeta("og:title", meta.title);
+    setMeta("twitter:title", meta.title);
+  }
+  if (meta.description) {
+    setNameMeta("description", meta.description);
+    setMeta("og:description", meta.description);
+    setMeta("twitter:description", meta.description);
+  }
+  if (meta.image) {
+    setMeta("og:image", meta.image);
+    setMeta("twitter:image", meta.image);
+    setNameMeta("twitter:card", "summary_large_image");
+  }
+  if (meta.url) {
+    setMeta("og:url", meta.url);
+    if (meta.canonical) {
+      setLink("canonical", meta.canonical);
+    } else {
+      setLink("canonical", meta.url);
     }
   }
-  if (!el) return;
-  // @ts-ignore: link uses href
-  el.setAttribute(attr, value);
+  setMeta("og:type", meta.type || "website");
 }
 
-/** Lightweight SEO/OG updater for client-side routes. */
-export function updateSEO({
-  title,
-  description,
-  image,
-  url,
-  type = "website",
-  twitterCard = "summary_large_image",
-}: SEOArgs) {
-  if (title) document.title = title;
-
-  if (description) {
-    upsertMeta('meta[name="description"]', "content", description);
-    upsertMeta('meta[property="og:description"]', "content", description);
-    upsertMeta('meta[name="twitter:description"]', "content", description);
+function setMeta(property: string, content: string) {
+  let el = document.querySelector<HTMLMetaElement>(`meta[property="${property}"]`);
+  if (!el) {
+    el = document.createElement("meta");
+    el.setAttribute("property", property);
+    document.head.appendChild(el);
   }
+  el.setAttribute("content", content);
+}
 
-  if (title) {
-    upsertMeta('meta[property="og:title"]', "content", title);
-    upsertMeta('meta[name="twitter:title"]', "content", title);
+function setNameMeta(name: string, content: string) {
+  let el = document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`);
+  if (!el) {
+    el = document.createElement("meta");
+    el.setAttribute("name", name);
+    document.head.appendChild(el);
   }
+  el.setAttribute("content", content);
+}
 
-  if (type) upsertMeta('meta[property="og:type"]', "content", type);
-  if (url) upsertMeta('meta[property="og:url"]', "content", url);
-
-  if (image) {
-    upsertMeta('meta[property="og:image"]', "content", image);
-    upsertMeta('meta[name="twitter:image"]', "content", image);
-    upsertMeta('meta[name="twitter:card"]', "content", twitterCard);
+function setLink(rel: string, href: string) {
+  let el = document.querySelector<HTMLLinkElement>(`link[rel="${rel}"]`);
+  if (!el) {
+    el = document.createElement("link");
+    el.rel = rel;
+    document.head.appendChild(el);
   }
-
-  // canonical link (optional, only if url provided)
-  if (url) upsertMeta('link[rel="canonical"]', "href", url);
+  el.href = href;
 }

@@ -4,12 +4,12 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import CreateArtwork from "./pages/CreateArtwork";
 import SettingsProfile from "./pages/SettingsProfile";
-import PublicProfile from "./routes/PublicProfile"; // keep your current path
+import PublicProfile from "./routes/PublicProfile";
 import MyProfile from "./pages/MyProfile";
+import ArtworkDetail from "./pages/ArtworkDetail"; // ⬅️ add
 import NavBar from "./components/NavBar";
 import { useAuth } from "./state/AuthContext";
 
-// ---------- Route guards ----------
 function ProtectedRoute({ children }: { children: JSX.Element }) {
   const { user, loading } = useAuth();
   const loc = useLocation();
@@ -36,12 +36,10 @@ function NotFound() {
   return <div className="p-8 text-neutral-400">Not found.</div>;
 }
 
-// ---------- App ----------
 export default function App() {
   return (
     <>
       <NavBar />
-
       <Routes>
         <Route path="/" element={<Home />} />
 
@@ -93,11 +91,13 @@ export default function App() {
           }
         />
 
+        {/* Artwork detail */}
+        <Route path="/a/:id" element={<ArtworkDetail />} />  {/* ⬅️ FIX for your “Not found” */}
+
         {/* Public profile routes */}
         <Route path="/@:handle" element={<PublicProfile />} />
         <Route path="/u/:username" element={<PublicProfile />} />
 
-        {/* Fallback */}
         <Route path="*" element={<NotFound />} />
       </Routes>
     </>

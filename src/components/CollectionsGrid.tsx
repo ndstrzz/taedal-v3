@@ -1,59 +1,134 @@
-// src/components/CollectionsGrid.tsx
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 
-type Row = {
+type Collection = {
   id: string;
+  owner_id: string;
   title: string | null;
   cover_url: string | null;
-  is_public: boolean | null;
+  is_public: boolean;
   created_at: string;
 };
 
-export default function CollectionsGrid({ profileId }: { profileId: string }) {
-  const [rows, setRows] = useState<Row[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+type Props = { ownerId: string; isOwner?: boolean };
+
+export default function CollectionsGrid({ ownerId, isOwner }: Props) {
+  const [rows, setRows] = useState<Collection[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [showNew, setShowNew] = useState(false);
+  const [title, setTitle] = useState("");
+  const [isPublic, setIsPublic] = useState(true);
 
   useEffect(() => {
-    let cancel = false;
     (async () => {
-      try {
-        const { data, error } = await supabase
-          .from("collections")
-          .select("id,title,cover_url,is_public,created_at")
-          .eq("owner_id", profileId)
-          .order("created_at", { ascending: false })
-          .limit(100);
-        if (error) throw error;
-        if (!cancel) setRows((data as Row[]) || []);
-      } catch (e: any) {
-        // If table doesn't exist yet, show empty state rather than throwing
-        if (!cancel) { setRows([]); setError(null); }
-      }
+      setLoading(true);
+      const { data } = await supabase
+        .from("collections")
+        .select("*")
+        .eq("owner_id", ownerId)
+        .order("created_at", { ascending: false });
+      setRows(((data || []) as Collection[]).filter((c) => isOwner || c.is_public));
+      setLoading(false);
     })();
-    return () => { cancel = true; };
-  }, [profileId]);
+  }, [ownerId, isOwner]);
 
-  if (rows === null) {
-    return <div className="h-24 animate-pulse rounded-xl bg-neutral-900" />;
+  async function createCollection() {
+    if (!title.trim()) return;
+    setBusy(true);
+    const { data, error } = await supabase
+      .from("collections")
+      .insert({ owner_id: ownerId, title: title.trim(), is_public: isPublic })
+      .select("*")
+      .single();
+    setBusy(false);
+    if (!error && data) {
+      setRows((r) => [data as Collection, ...r]);
+      setTitle("");
+      setIsPublic(true);
+      setShowNew(false);
+    }
   }
-  if (rows.length === 0) {
-    return <div className="text-neutral-400">No collections yet.</div>;
-  }
+
+  const empty = useMemo(() => rows.length === 0, [rows]);
+
   return (
-    <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-      {rows.map((c) => (
-        <li key={c.id} className="group">
-          <div className="aspect-square w-full overflow-hidden rounded-2xl bg-neutral-900">
-            {c.cover_url ? (
-              <img src={c.cover_url} alt="" className="h-full w-full object-cover" loading="lazy" />
-            ) : (
-              <div className="grid h-full w-full place-items-center text-sm text-neutral-500">No cover</div>
-            )}
-          </div>
-          <div className="mt-2 truncate text-sm text-neutral-200">{c.title || "Untitled"}</div>
-        </li>
-      ))}
-    </ul>
+    <div>
+      {isOwner && (
+        <div className="mb-4">
+          {!showNew ? (
+            <button
+              onClick={() => setShowNew(true)}
+              className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900"
+            >
+              New collection
+            </button>
+          ) : (
+            <div className="rounded-2xl border border-neutral-800 p-3">
+              <div className="mb-2 text-sm font-medium">Create collection</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Title"
+                  className="min-w-[220px] rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm outline-none"
+                />
+                <label className="flex items-center gap-2 text-sm text-neutral-300">
+                  <input
+                    type="checkbox"
+                    checked={isPublic}
+                    onChange={(e) => setIsPublic(e.target.checked)}
+                  />
+                  Public
+                </label>
+                <button
+                  disabled={busy}
+                  onClick={createCollection}
+                  className="rounded-lg border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900 disabled:opacity-60"
+                >
+                  {busy ? "Saving…" : "Create"}
+                </button>
+                <button
+                  onClick={() => setShowNew(false)}
+                  className="rounded-lg px-3 py-1.5 text-sm text-neutral-300 hover:bg-neutral-900"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {loading && <div className="text-sm text-neutral-400">Loading collections…</div>}
+      {!loading && empty && (
+        <div className="text-neutral-400">{isOwner ? "No collections yet. Create one." : "No public collections yet."}</div>
+      )}
+
+      <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+        {rows.map((c) => (
+          <li key={c.id} className="group">
+            <div className="aspect-square w-full overflow-hidden rounded-2xl bg-neutral-900">
+              {c.cover_url ? (
+                <img
+                  src={c.cover_url}
+                  alt={c.title ?? ""}
+                  className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                  loading="lazy"
+                />
+              ) : (
+                <div className="grid h-full w-full place-items-center text-sm text-neutral-500">
+                  No cover
+                </div>
+              )}
+            </div>
+            <div className="mt-2 truncate text-sm text-neutral-200">
+              {c.title || "Untitled"}
+              {!c.is_public && <span className="ml-2 rounded-full border border-neutral-700 px-2 py-[2px] text-[10px] text-neutral-300">Private</span>}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
