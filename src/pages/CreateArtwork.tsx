@@ -50,9 +50,10 @@ export default function CreateArtwork() {
   const [mintBusy, setMintBusy] = useState(false);
   const [mintErr, setMintErr] = useState<string | null>(null);
 
-  // temp values carried into mint step
-  const [pendingMetaUrl, setPendingMetaUrl] = useState<string>(""); // ipfs://...
-  const [pendingImageCid, setPendingImageCid] = useState<string>("");
+  // values carried into mint step
+  const [pendingMetaUrl, setPendingMetaUrl] = useState<string>("");     // ipfs://...
+  const [pendingImageCid, setPendingImageCid] = useState<string>("");   // raw CID
+  const [pendingCoverUrl, setPendingCoverUrl] = useState<string>("");   // HTTP gateway URL
   const [pendingArtworkNum, setPendingArtworkNum] = useState<number | null>(null);
 
   // skeleton for first mount
@@ -62,7 +63,7 @@ export default function CreateArtwork() {
     return () => clearTimeout(t);
   }, []);
 
-  // Preview blob URL management
+  // Preview blob URL
   useEffect(() => {
     if (!file) {
       setPreviewUrl("");
@@ -73,7 +74,6 @@ export default function CreateArtwork() {
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
-  // whether user must acknowledge originality (only when we found matches)
   const mustAcknowledge = (candidates?.length ?? 0) > 0;
 
   const canSubmit = useMemo(
@@ -86,7 +86,7 @@ export default function CreateArtwork() {
     [file, title, busy, checking, mustAcknowledge, ackOriginal]
   );
 
-  // ——— file intake & validation ———
+  // intake & validation
   const handleNewFile = useCallback(
     (f: File) => {
       if (!ACCEPT.split(",").includes(f.type)) {
@@ -121,7 +121,7 @@ export default function CreateArtwork() {
     [handleNewFile]
   );
 
-  // Auto-run similarity check as soon as a file is chosen
+  // Auto similarity check
   useEffect(() => {
     if (!file) return;
     if (!API_BASE) {
@@ -137,15 +137,12 @@ export default function CreateArtwork() {
       setCandidates(null);
       try {
         const fd = new FormData();
-        // NOTE: server /api/verify expects field "artwork" in your older code,
-        // but our Express route was written to accept "file". Keep “file”.
         fd.append("file", file);
         const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/verify`, {
           method: "POST",
           body: fd,
         });
         if (!r.ok) throw new Error(`Similarity check failed (${r.status})`);
-        // our server returns { query, similar: [] }
         const out = (await r.json()) as { similar?: SimilarRecord[] };
         const results = Array.isArray(out?.similar) ? out.similar : [];
         setCandidates(results);
@@ -163,14 +160,14 @@ export default function CreateArtwork() {
           title: "Similarity check error",
           description: String(err.message || err),
         });
-        setCandidates([]); // let user proceed even if check failed
+        setCandidates([]); // allow proceed even if check fails
       } finally {
         setChecking(false);
       }
     })();
   }, [file, toast]);
 
-  // Create → upload + metadata, then open wallet modal for mint
+  // Create → upload + metadata → open wallet modal
   const onSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
@@ -207,7 +204,11 @@ export default function CreateArtwork() {
         setProgress(100);
         toast({ variant: "success", title: "Pinned media to IPFS" });
 
-        // 2) Hashes
+        // save for later insert
+        setPendingImageCid(pin.cid);
+        setPendingCoverUrl(pin.gatewayUrl || DEFAULT_COVER_URL);
+
+        // 2) Hashes (optional, but you use them)
         const fd1 = new FormData();
         fd1.append("file", file);
         const r1 = await fetch(`${API_BASE.replace(/\/$/, "")}/api/hashes`, {
@@ -216,13 +217,13 @@ export default function CreateArtwork() {
         });
         if (!r1.ok) throw new Error(`Failed to compute hashes (${r1.status})`);
         const { dhash64, sha256 } = await r1.json();
-        toast({ title: "Computed hashes", description: "Perceptual + SHA256" });
+        void dhash64; void sha256;
 
         // 3) Metadata
         const metadata = {
           name: title.trim(),
           description: description.trim(),
-          imageCid: pin.cid, // our /api/metadata understands imageCid
+          imageCid: pin.cid,
         };
         const r2 = await fetch(`${API_BASE.replace(/\/$/, "")}/api/metadata`, {
           method: "POST",
@@ -237,12 +238,9 @@ export default function CreateArtwork() {
           `ipfs://${metaOut?.metadata_cid}`;
         toast({ variant: "success", title: "Pinned metadata" });
 
-        // Prepare values for mint step
+        // 4) Prepare mint
         setPendingMetaUrl(metadataUri);
-        setPendingImageCid(pin.cid);
         setPendingArtworkNum(Math.floor(Date.now() / 1000)); // numeric tag for mintWithURI
-
-        // Open wallet modal
         setMintErr(null);
         setMintOpen(true);
       } catch (err: any) {
@@ -272,14 +270,14 @@ export default function CreateArtwork() {
         description: `tx: ${txHash.slice(0, 10)}…`,
       });
 
-      // Insert DB row *after* successful mint
+      // Insert DB row with the REAL cover image
       const { data: inserted, error: dberr } = await supabase
         .from("artworks")
         .insert({
           owner: user!.id,
           title: title.trim(),
           description: description.trim(),
-          cover_url: DEFAULT_COVER_URL,
+          cover_url: pendingCoverUrl || DEFAULT_COVER_URL,
           status: "published",
           image_cid: pendingImageCid,
           metadata_url: pendingMetaUrl,
@@ -301,8 +299,6 @@ export default function CreateArtwork() {
       setMintBusy(false);
     }
   }
-
-  // --- UI ---
 
   if (initializing) {
     return (
@@ -402,7 +398,6 @@ export default function CreateArtwork() {
             </div>
           )}
 
-          {/* originality confirmation appears only when matches are found */}
           {(candidates?.length ?? 0) > 0 && (
             <label className="flex items-start gap-3 rounded-2xl border border-yellow-600/40 bg-yellow-500/10 p-3 text-sm text-yellow-100">
               <input
