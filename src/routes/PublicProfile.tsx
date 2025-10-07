@@ -1,3 +1,4 @@
+// src/pages/PublicProfile.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
@@ -29,8 +30,9 @@ const PAGE_SIZE = 12;
 const ipfs = (cid?: string | null) => (cid ? `https://ipfs.io/ipfs/${cid}` : "");
 
 export default function PublicProfile() {
-  const { handle = "" } = useParams();
-  const username = handle.replace(/^@/, "");
+  // URL is /u/:username
+  const { username: usernameParam = "" } = useParams();
+  const username = (usernameParam || "").replace(/^@/, ""); // tolerate @user links
   const { toast } = useToast();
   const { user } = useAuth();
 
@@ -160,7 +162,7 @@ export default function PublicProfile() {
 
       {/* Header */}
       <div className="mx-auto -mt-12 max-w-6xl px-4">
-        <div className="flex items-end gap-4">
+        <div className="flex items.end gap-4">
           <img
             src={profile.avatar_url || "/brand/taedal-logo.svg"}
             alt={displayName}
@@ -206,7 +208,7 @@ export default function PublicProfile() {
         </div>
       </div>
 
-      {/* Modal */}
+      {/* Followers/Following modal */}
       {profile && showModal && (
         <FollowListModal
           open
