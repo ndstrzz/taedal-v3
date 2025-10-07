@@ -61,7 +61,6 @@ export default function CreateArtwork() {
   // verify
   const [checking, setChecking] = useState(false);
   const [candidates, setCandidates] = useState<SimilarRecord[] | null>(null);
-  const [ackOriginalMedia, setAckOriginalMedia] = useState(false); // ✅ must-ack in Media if matches
 
   // progress
   const [busy, setBusy] = useState(false);
@@ -82,22 +81,14 @@ export default function CreateArtwork() {
   const [pendingSha256, setPendingSha256] = useState<string>("");
 
   // wizard
-  const mustAcknowledgeMedia = (candidates?.length ?? 0) > 0;
   const [step, setStep] = useState<Step>("media");
   const canNext =
-    step === "media"
-      ? !!file &&
-        (!isVideo || !!posterBlob) &&
-        (!mustAcknowledgeMedia || ackOriginalMedia) // ✅ require ack if matches
-    : step === "details"
-      ? !!title.trim()
-    : step === "rights"
-      ? ackRights
-    : step === "sale"
-      ? (saleKind === "fixed" ? Number(salePrice) > 0 : true)
-    : step === "preview"
-      ? true
-    : false;
+    step === "media"    ? !!file && (!isVideo || !!posterBlob)
+  : step === "details"  ? !!title.trim()
+  : step === "rights"   ? ackRights
+  : step === "sale"     ? (saleKind === "fixed" ? Number(salePrice) > 0 : true)
+  : step === "preview"  ? true
+  : false;
 
   // preview blob URL
   useEffect(() => {
@@ -128,7 +119,6 @@ export default function CreateArtwork() {
     setFile(f);
     setCandidates(null);
     setAckRights(false);
-    setAckOriginalMedia(false); // ✅ reset ack when picking a new file
     setPosterBlob(null);
   }, [toast]);
 
@@ -138,65 +128,27 @@ export default function CreateArtwork() {
     e.currentTarget.value = "";
   }, [handleNewFile]);
 
-  // Auto-generate a poster for videos as soon as they’re picked (silent)
+  // Auto similarity check (same as your previous page)
   useEffect(() => {
-    if (file && isVideo && !posterBlob) {
-      (async () => {
-        try {
-          const blob = await capturePosterFromVideo(file);
-          setPosterBlob(blob);
-        } catch {
-          /* silent; user can still click "Capture poster" manually */
-        }
-      })();
-    }
-  }, [file, isVideo, posterBlob]);
-
-  // Auto similarity check: image → downscale; video → use poster
-  useEffect(() => {
-    async function runCheck(checkBlob: Blob, nameHint = "check.jpg") {
+    if (!file || !API_BASE) return;
+    (async () => {
       try {
         setChecking(true);
         const fd = new FormData();
-        fd.append("file", new File([checkBlob], nameHint, { type: checkBlob.type || "image/jpeg" }));
-        const r = await fetch(`${API_BASE!.replace(/\/$/, "")}/api/verify`, {
-          method: "POST",
-          body: fd,
-          headers: { Accept: "application/json" }
-        });
-        const out = await r.json().catch(() => ({}));
+        fd.append("file", file);
+        const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/verify`, { method: "POST", body: fd, headers: { Accept: "application/json" }});
+        const out = await r.json();
         const results = Array.isArray(out?.similar) ? out.similar : out?.matches || [];
         setCandidates(results);
       } catch {
-        setCandidates([]); // allow continue if API fails
+        setCandidates([]);
       } finally {
         setChecking(false);
       }
-    }
-
-    (async () => {
-      if (!file || !API_BASE) return;
-
-      // reset results on each new file/poster
-      setCandidates(null);
-      setAckOriginalMedia(false);
-
-      if (isVideo) {
-        if (!posterBlob) return; // wait for poster first
-        await runCheck(posterBlob, "poster.webp");
-      } else {
-        try {
-          const blob = await downscaleForVerify(file, 1024);
-          await runCheck(blob, file.name || "image.jpg");
-        } catch {
-          // fall back to full file if downscale fails
-          await runCheck(file, file.name || "image.jpg");
-        }
-      }
     })();
-  }, [file, isVideo, posterBlob]);
+  }, [file]);
 
-  // Generate poster for videos (manual button)
+  // Generate poster for videos
   const makePoster = useCallback(async () => {
     if (!file || !isVideo) return;
     try {
@@ -411,54 +363,8 @@ export default function CreateArtwork() {
                 </div>
               </>
             )}
+            {checking && <div className="mt-2 text-xs text-neutral-400">Checking near-duplicates…</div>}
           </div>
-
-          {/* Similarity panel (full width under the two columns) */}
-          {file && (
-            <div className="col-span-full rounded-2xl border border-neutral-800 p-3">
-              {checking ? (
-                <div className="text-xs text-neutral-400">Checking for similar works…</div>
-              ) : candidates ? (
-                candidates.length > 0 ? (
-                  <>
-                    <div className="mb-2 text-sm font-medium">Possible matches</div>
-                    <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-                      {candidates.map((c) => (
-                        <li key={c.id} className="rounded-lg border border-neutral-800 p-2">
-                          <div className="mb-2 aspect-square overflow-hidden rounded bg-neutral-900">
-                            {c.image_url ? (
-                              <img src={c.image_url} className="h-full w-full object-cover" />
-                            ) : (
-                              <div className="grid h-full w-full place-items-center text-xs text-neutral-500">No preview</div>
-                            )}
-                          </div>
-                          <div className="truncate text-xs text-neutral-200">{c.title || "Untitled"}</div>
-                          {typeof c.score === "number" && (
-                            <div className="mt-0.5 text-[11px] text-neutral-500">score: {c.score.toFixed(2)}</div>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-
-                    {/* must acknowledge before proceeding */}
-                    <label className="mt-3 flex items-start gap-3 rounded-xl border border-yellow-600/40 bg-yellow-500/10 p-3 text-sm text-yellow-100">
-                      <input
-                        type="checkbox"
-                        checked={ackOriginalMedia}
-                        onChange={(e) => setAckOriginalMedia(e.target.checked)}
-                        className="mt-0.5"
-                      />
-                      <span>I confirm I am the original creator or have the rights to mint and list this artwork.</span>
-                    </label>
-                  </>
-                ) : (
-                  <div className="text-xs text-neutral-400">No near-duplicates found.</div>
-                )
-              ) : (
-                <div className="text-xs text-neutral-400">Ready to check similarity once uploaded.</div>
-              )}
-            </div>
-          )}
 
           <div className="col-span-full flex justify-end">
             <button type="button" disabled={!canNext}
@@ -621,6 +527,29 @@ export default function CreateArtwork() {
             <button type="button" onClick={onPublish} disabled={busy}
               className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-60">Mint & publish</button>
           </div>
+
+          {/* Similarity results */}
+          {candidates && (
+            <div className="mt-6">
+              <h2 className="mb-2 text-lg font-semibold">Possible matches</h2>
+              {candidates.length === 0 ? (
+                <div className="text-sm text-neutral-400">No similar artworks found.</div>
+              ) : (
+                <ul className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
+                  {candidates.map((c) => (
+                    <li key={c.id} className="rounded-xl border border-neutral-800 p-3">
+                      <div className="mb-2 aspect-square overflow-hidden rounded-lg bg-neutral-900">
+                        {c.image_url ? <img src={c.image_url} className="h-full w-full object-cover" /> : <div className="grid h-full w-full place-items-center text-xs text-neutral-500">No preview</div>}
+                      </div>
+                      <div className="truncate text-sm font-medium">{c.title || "Untitled"}</div>
+                      {c.username && <div className="truncate text-xs text-neutral-400">@{c.username}</div>}
+                      {typeof c.score === "number" && <div className="mt-1 text-xs text-neutral-500">score: {c.score.toFixed(2)}</div>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -634,26 +563,4 @@ export default function CreateArtwork() {
       />
     </div>
   );
-}
-
-/** Downscale images client-side for the verify API (keeps videos untouched). */
-async function downscaleForVerify(srcFile: File, maxSide = 1024): Promise<Blob> {
-  if (!srcFile.type.startsWith("image/")) return srcFile; // leave videos alone
-  const bitmap = await createImageBitmap(srcFile);
-  const longest = Math.max(bitmap.width, bitmap.height);
-  const scale = Math.min(1, maxSide / longest);
-  const w = Math.round(bitmap.width * scale);
-  const h = Math.round(bitmap.height * scale);
-
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d")!;
-  ctx.drawImage(bitmap, 0, 0, w, h);
-
-  // JPEG @ 0.8 balances size/quality; server uses it for hashing
-  const blob: Blob = await new Promise((res) =>
-    canvas.toBlob((b) => res(b || srcFile), "image/jpeg", 0.8)
-  );
-  return blob;
 }
