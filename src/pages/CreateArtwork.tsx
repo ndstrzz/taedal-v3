@@ -55,6 +55,8 @@ export default function CreateArtwork() {
   const [pendingImageCid, setPendingImageCid] = useState<string>("");   // raw CID
   const [pendingCoverUrl, setPendingCoverUrl] = useState<string>("");   // HTTP gateway URL
   const [pendingArtworkNum, setPendingArtworkNum] = useState<number | null>(null);
+  const [pendingDHash, setPendingDHash] = useState<string>("");         // for DB insert
+  const [pendingSha256, setPendingSha256] = useState<string>("");       // for DB insert
 
   // skeleton for first mount
   const [initializing, setInitializing] = useState(true);
@@ -121,7 +123,7 @@ export default function CreateArtwork() {
     [handleNewFile]
   );
 
-  // Auto similarity check
+  // Auto similarity check — NOTE: send as "artwork"
   useEffect(() => {
     if (!file) return;
     if (!API_BASE) {
@@ -137,7 +139,7 @@ export default function CreateArtwork() {
       setCandidates(null);
       try {
         const fd = new FormData();
-        fd.append("file", file);
+        fd.append("artwork", file); // <-- important
         const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/verify`, {
           method: "POST",
           body: fd,
@@ -208,7 +210,7 @@ export default function CreateArtwork() {
         setPendingImageCid(pin.cid);
         setPendingCoverUrl(pin.gatewayUrl || DEFAULT_COVER_URL);
 
-        // 2) Hashes (optional, but you use them)
+        // 2) Hashes — store for insert
         const fd1 = new FormData();
         fd1.append("file", file);
         const r1 = await fetch(`${API_BASE.replace(/\/$/, "")}/api/hashes`, {
@@ -217,7 +219,9 @@ export default function CreateArtwork() {
         });
         if (!r1.ok) throw new Error(`Failed to compute hashes (${r1.status})`);
         const { dhash64, sha256 } = await r1.json();
-        void dhash64; void sha256;
+        setPendingDHash(dhash64 || "");
+        setPendingSha256(sha256 || "");
+        toast({ title: "Computed hashes", description: "Perceptual + SHA256" });
 
         // 3) Metadata
         const metadata = {
@@ -256,7 +260,7 @@ export default function CreateArtwork() {
     [user, file, title, description, toast]
   );
 
-  // When MetaMask is picked inside modal
+  // Mint via MetaMask then insert DB row (now includes hashes)
   async function handleMintWithMetaMask() {
     try {
       setMintBusy(true);
@@ -270,7 +274,6 @@ export default function CreateArtwork() {
         description: `tx: ${txHash.slice(0, 10)}…`,
       });
 
-      // Insert DB row with the REAL cover image
       const { data: inserted, error: dberr } = await supabase
         .from("artworks")
         .insert({
@@ -283,6 +286,8 @@ export default function CreateArtwork() {
           metadata_url: pendingMetaUrl,
           token_id: tokenId,
           tx_hash: txHash,
+          dhash64: pendingDHash || null,
+          sha256: pendingSha256 || null,
         })
         .select("*")
         .single();

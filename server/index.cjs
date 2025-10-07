@@ -202,6 +202,57 @@ app.post("/api/verify", upload.single("file"), async (req, res) => {
   }
 });
 
+// Similarity search: accept 'artwork' or 'file'
+app.post('/api/verify', upload.any(), async (req, res) => {
+  try {
+    // find a file from either key
+    const f =
+      (req.files || []).find((x) => x.fieldname === 'artwork') ||
+      (req.files || []).find((x) => x.fieldname === 'file');
+
+    if (!f) return res.status(400).json({ error: 'No file' });
+
+    const qHash = await dhash64(f.buffer);
+
+    if (!sb) return res.json({ query: qHash, similar: [] });
+
+    const { data, error } = await sb
+      .from('artworks')
+      .select('id,title,owner,cover_url,dhash64')
+      .eq('status', 'published')
+      .not('dhash64', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(200);
+
+    if (error) throw error;
+
+    const SIM_THRESHOLD = 0.86;
+    const results = (data || [])
+      .map((r) => {
+        if (!r.dhash64) return null;
+        const dist = hammingHex(qHash, r.dhash64);
+        const score = 1 - dist / 64;
+        return {
+          id: r.id,
+          title: r.title || 'Untitled',
+          username: '',
+          user_id: r.owner,
+          image_url: r.cover_url,
+          score,
+        };
+      })
+      .filter(Boolean)
+      .filter((r) => r.score >= SIM_THRESHOLD)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 12);
+
+    res.json({ query: qHash, similar: results });
+  } catch (e) {
+    console.error('[verify] error', e);
+    res.status(500).json({ error: 'verify failed' });
+  }
+});
+
 // ── Start ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`API server listening on http://localhost:${PORT}`);
