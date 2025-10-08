@@ -37,8 +37,8 @@ type Artwork = {
 
 type Listing = {
   artwork_id: string;
-  listing_id?: string;
-  id?: string;
+  listing_id?: string; // from v_active_listing
+  id?: string; // from listings table fallback
   lister: string | null;
   status: "active" | "cancelled" | "filled";
   price: string | null;
@@ -220,28 +220,22 @@ export default function ArtworkDetail() {
     await Promise.all([fetchListing(id), fetchActivity(id)]);
   }
 
-  // ---- Media selection (robust) -------------------------------------------
+  // ---- Media selection (robust)
   const media = useMemo(() => {
     const poster = art?.cover_url || DEFAULT_COVER_URL;
-
-    // Priorities:
-    // 1) If video: animation_cid -> meta.animation_url -> poster
     if (art?.media_kind === "video") {
-      if (art?.animation_cid) return { kind: "video" as const, poster, src: ipfsToHttp(`ipfs://${art.animation_cid}`) };
-      if (meta?.animation_url) return { kind: "video" as const, poster, src: ipfsToHttp(meta.animation_url) };
+      if (art?.animation_cid)
+        return { kind: "video" as const, poster, src: ipfsToHttp(`ipfs://${art.animation_cid}`) };
+      if (meta?.animation_url)
+        return { kind: "video" as const, poster, src: ipfsToHttp(meta.animation_url) };
       return { kind: "video" as const, poster, src: "" };
     }
-
-    // 2) If image: image_cid -> meta.image (ipfs or http) -> poster
     if (art?.image_cid) {
       return { kind: "image" as const, poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) };
     }
     if (meta?.image) {
-      const img = ipfsToHttp(meta.image);
-      return { kind: "image" as const, poster, src: img };
+      return { kind: "image" as const, poster, src: ipfsToHttp(meta.image) };
     }
-
-    // 3) Fallback to poster
     return { kind: "image" as const, poster, src: poster };
   }, [art?.media_kind, art?.animation_cid, art?.image_cid, art?.cover_url, meta?.animation_url, meta?.image]);
 
@@ -251,7 +245,6 @@ export default function ArtworkDetail() {
     return m;
   }, [traitStats]);
 
-  // Early returns
   if (loading) return <Skeleton />;
   if (err) return <div className="p-6 text-red-400">Error: {err}</div>;
   if (!art) return <div className="p-6 text-neutral-400">Artwork not found.</div>;
@@ -259,13 +252,48 @@ export default function ArtworkDetail() {
   const title = art.title || meta?.name || "Untitled";
   const desc = art.description || meta?.description || "";
   const royaltyPct = ((art.royalty_bps || 0) / 100).toFixed(2);
-
   const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
 
+  // Prefer listing, fallback to artwork sale_* for display + buy
   const listingId = listing?.listing_id || listing?.id || null;
   const currentPrice = listing?.price ?? art.sale_price ?? "";
   const currentCurrency = (listing?.currency || art.sale_currency || "ETH") as "ETH" | "WETH" | "USD";
   const displayPrice = currentPrice ? `${currentPrice} ${currentCurrency}` : null;
+
+  // Can buy if we either have a listing OR a fixed-price artwork
+  const canBuy =
+    Boolean(listingId && currentPrice) ||
+    Boolean(!listingId && art.sale_kind === "fixed" && art.sale_price);
+
+  // If no listing yet but fixed price exists, create listing then open modal
+  async function handleBuyClick() {
+    try {
+      if (listingId) {
+        setShowCheckout(true);
+        return;
+      }
+      // Create listing on the fly (server will insert into listings + activity)
+      const body = {
+        artwork_id: art.id,
+        lister: art.owner, // if you want current user instead, wire in auth user id here
+        price: art.sale_price,
+        currency: art.sale_currency || "ETH",
+      };
+      const r = await fetch("/api/listings/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error(`Create listing failed (${r.status})`);
+      const j = await r.json();
+      const created = j?.listing as Listing | undefined;
+      if (created) setListing(created);
+      setShowCheckout(true);
+    } catch (e) {
+      console.error(e);
+      // Non-fatal – you can add a toast here if you have one wired in this file
+    }
+  }
 
   return (
     <div className="mx-auto max-w-6xl p-6">
@@ -287,7 +315,7 @@ export default function ArtworkDetail() {
               className="h-full w-full object-contain"
               onError={(e) => {
                 const el = e.currentTarget;
-                if (el.src !== media.poster) el.src = media.poster; // graceful fallback
+                if (el.src !== media.poster) el.src = media.poster;
               }}
             />
           )}
@@ -320,8 +348,8 @@ export default function ArtworkDetail() {
             <div className="mt-3 flex gap-2">
               <button
                 className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
-                disabled={!displayPrice || !listingId}
-                onClick={() => setShowCheckout(true)}
+                disabled={!canBuy}
+                onClick={handleBuyClick}
               >
                 Buy now
               </button>
@@ -438,7 +466,9 @@ export default function ArtworkDetail() {
                       {pct !== null ? (
                         <>
                           <div className="text-xs text-neutral-400">{pct}%</div>
-                          <div className="text-[11px] text-neutral-500">{s?.count ?? 0} of {s?.total ?? 0}</div>
+                          <div className="text-[11px] text-neutral-500">
+                            {s?.count ?? 0} of {s?.total ?? 0}
+                          </div>
                         </>
                       ) : (
                         <div className="text-xs text-neutral-500">—</div>
@@ -455,13 +485,13 @@ export default function ArtworkDetail() {
       </div>
 
       {/* Modals */}
-      {showCheckout && listing && listingId && (
+      {showCheckout && (listing || art.sale_kind === "fixed") && (
         <CheckoutModal
           open={showCheckout}
           onClose={() => setShowCheckout(false)}
           onPurchased={refetchAll}
           artworkId={art.id}
-          listingId={listingId}
+          listingId={listingId || ""} // modal/server will still work after create
           title={title}
           price={String(currentPrice)}
           currency={currentCurrency}
