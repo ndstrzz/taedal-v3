@@ -5,7 +5,7 @@ import App from "./App";
 import "./index.css";
 import { ToastProvider } from "./components/Toaster";
 import { AuthProvider } from "./state/AuthContext";
-import { initSentry } from "./sentry";
+import { initSentry } from "./sentry";   // ⬅️ fixed (was "../src/sentry")
 
 initSentry();
 
