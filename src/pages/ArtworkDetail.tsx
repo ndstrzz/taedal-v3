@@ -1,326 +1,303 @@
-// src/pages/ArtworkDetail.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { DEFAULT_COVER_URL, API_BASE } from "../lib/config";
 import { ipfsToHttp } from "../lib/ipfs-url";
-import { DEFAULT_COVER_URL } from "../lib/config";
-
-type Attribute = { trait_type: string; value: string | number };
-type Metadata = {
-  name?: string;
-  description?: string;
-  image?: string;
-  animation_url?: string;
-  attributes?: Attribute[];
-};
+import { useAuth } from "../state/AuthContext";
+import { Helmet } from "react-helmet-async"; // add: npm i react-helmet-async
+import { useToast } from "../components/Toaster";
 
 type Artwork = {
   id: string;
+  owner: string;
   title: string | null;
   description: string | null;
-  owner: string | null;
   cover_url: string | null;
+  status: "draft" | "published";
+  media_kind: "image" | "video";
   image_cid: string | null;
   animation_cid: string | null;
   metadata_url: string | null;
   token_id: string | null;
   tx_hash: string | null;
-  media_kind: "image" | "video" | null;
-  royalty_bps: number | null;
+  royalty_bps: number;
   sale_kind: "fixed" | "auction" | null;
+  sale_currency: string | null;
   sale_price: string | null;
-  sale_currency: "ETH" | "WETH" | null;
   created_at: string;
 };
 
-type TraitStat = {
-  trait_type: string;
-  value: string;
-  count: number;
-  total: number;
-  freq: number; // 0..1
-};
-
-type Act = {
-  id: string;
-  kind: "mint" | "list" | "sale" | "bid" | "transfer";
+type Attr = { trait_type: string; value: string };
+type Activity = {
+  id: number;
+  kind: "mint" | "list" | "unlist" | "offer" | "sale" | "transfer";
   tx_hash: string | null;
-  price_eth: string | number | null;
-  actor: string | null;
   created_at: string;
+  data: any;
 };
-
-function Skeleton() {
-  return (
-    <div className="mx-auto max-w-6xl p-6">
-      <div className="grid gap-6 md:grid-cols-2">
-        <div className="aspect-square animate-pulse rounded-2xl bg-neutral-900" />
-        <div className="space-y-3">
-          <div className="h-6 w-1/2 animate-pulse rounded bg-neutral-900" />
-          <div className="h-4 w-1/3 animate-pulse rounded bg-neutral-900" />
-          <div className="h-10 w-40 animate-pulse rounded bg-neutral-900" />
-          <div className="h-28 w-full animate-pulse rounded bg-neutral-900" />
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export default function ArtworkDetail() {
   const { id } = useParams<{ id: string }>();
-
+  const { user } = useAuth();
+  const { toast } = useToast();
   const [art, setArt] = useState<Artwork | null>(null);
-  const [meta, setMeta] = useState<Metadata | null>(null);
+  const [attrs, setAttrs] = useState<Attr[]>([]);
+  const [activity, setActivity] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
 
-  const [tab, setTab] = useState<"details" | "activity">("details");
-  const [acts, setActs] = useState<Act[]>([]);
-  const [traitStats, setTraitStats] = useState<TraitStat[]>([]);
+  // listing controls
+  const isOwner = !!user && art?.owner === user.id;
+  const [listPrice, setListPrice] = useState<string>("");
 
-  // 1) Load artwork
   useEffect(() => {
-    let mounted = true;
+    if (!id) return;
     (async () => {
+      setLoading(true);
       try {
-        setLoading(true);
-        const { data, error } = await supabase
+        const { data: a, error } = await supabase
           .from("artworks")
           .select("*")
           .eq("id", id)
           .single();
         if (error) throw error;
-        if (mounted) setArt(data as unknown as Artwork);
+        setArt(a as any);
+
+        const { data: at } = await supabase
+          .from("artwork_attributes")
+          .select("trait_type, value")
+          .eq("artwork_id", id)
+          .order("trait_type", { ascending: true });
+        setAttrs((at || []) as any);
+
+        const { data: act } = await supabase
+          .from("activity")
+          .select("*")
+          .eq("artwork_id", id)
+          .order("created_at", { ascending: false });
+        setActivity((act || []) as any);
       } catch (e: any) {
-        setErr(e?.message || "Failed to load artwork");
+        toast({ variant: "error", title: "Failed to load", description: String(e?.message || e) });
       } finally {
         setLoading(false);
       }
     })();
-    return () => {
-      mounted = false;
-    };
-  }, [id]);
+  }, [id, toast]);
 
-  // 2) Load metadata JSON
-  useEffect(() => {
-    let aborted = false;
-    (async () => {
-      if (!art?.metadata_url) return setMeta(null);
-      try {
-        const url = ipfsToHttp(art.metadata_url);
-        const r = await fetch(url, { cache: "no-store" });
-        if (!r.ok) throw new Error(`Metadata HTTP ${r.status}`);
-        const j = (await r.json()) as Metadata;
-        if (!aborted) setMeta(j || null);
-      } catch (e) {
-        console.warn("[metadata] fetch failed:", e);
-        if (!aborted) setMeta(null);
-      }
-    })();
-    return () => {
-      aborted = true;
-    };
-  }, [art?.metadata_url]);
-
-  // 3) Activity for this artwork
-  useEffect(() => {
-    if (!art?.id) return;
-    (async () => {
-      const { data, error } = await supabase
-        .from("activity")
-        .select("*")
-        .eq("artwork_id", art.id)
-        .order("created_at", { ascending: false });
-      if (!error && data) setActs(data as Act[]);
-    })();
-  }, [art?.id]);
-
-  // 4) Rarity stats (materialized view)
-  useEffect(() => {
-    (async () => {
-      const { data, error } = await supabase.from("trait_stats_mv").select("*");
-      if (!error && data) setTraitStats(data as TraitStat[]);
-    })();
-  }, []);
-
-  // 5) Compute media + rarity map BEFORE any early returns
-  const media = useMemo(() => {
-    if (!art) return { kind: "image" as const, poster: DEFAULT_COVER_URL, src: "" };
-    const poster = art.cover_url || DEFAULT_COVER_URL;
-
+  const mediaUrl = useMemo(() => {
+    if (!art) return DEFAULT_COVER_URL;
     if (art.media_kind === "video" && art.animation_cid) {
-      return { kind: "video" as const, poster, src: ipfsToHttp(`ipfs://${art.animation_cid}`) };
+      return ipfsToHttp(`ipfs://${art.animation_cid}`);
     }
-    if (art.image_cid) {
-      return { kind: "image" as const, poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) };
+    if (art.image_cid) return ipfsToHttp(`ipfs://${art.image_cid}`);
+    return art.cover_url || DEFAULT_COVER_URL;
+  }, [art]);
+
+  async function doList() {
+    if (!art || !user) return;
+    try {
+      const price = Number(listPrice);
+      if (!Number.isFinite(price) || price <= 0) {
+        toast({ variant: "error", title: "Enter a valid price in ETH" });
+        return;
+      }
+      const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/activity/list`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artwork_id: art.id, actor: user.id, price: listPrice, currency: "ETH" })
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Listed" });
+      setArt({ ...(art as any), sale_kind: "fixed", sale_price: listPrice, sale_currency: "ETH" });
+      setActivity([{ id: Date.now(), kind: "list", tx_hash: null, created_at: new Date().toISOString(), data: { price: listPrice, currency: "ETH" } }, ...activity]);
+      setListPrice("");
+    } catch (e: any) {
+      toast({ variant: "error", title: "List failed", description: String(e?.message || e) });
     }
+  }
 
-    const metaAnim = meta?.animation_url ? ipfsToHttp(meta.animation_url) : "";
-    const metaImg = meta?.image ? ipfsToHttp(meta.image) : "";
+  async function doUnlist() {
+    if (!art || !user) return;
+    try {
+      const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/activity/unlist`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artwork_id: art.id, actor: user.id })
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Unlisted" });
+      setArt({ ...(art as any), sale_kind: null, sale_price: null });
+      setActivity([{ id: Date.now(), kind: "unlist", tx_hash: null, created_at: new Date().toISOString(), data: {} }, ...activity]);
+    } catch (e: any) {
+      toast({ variant: "error", title: "Unlist failed", description: String(e?.message || e) });
+    }
+  }
 
-    if (metaAnim) return { kind: "video" as const, poster, src: metaAnim };
-    if (metaImg) return { kind: "image" as const, poster, src: metaImg };
-    return { kind: "image" as const, poster, src: poster };
-  }, [art, meta]);
+  async function doOffer(val?: string) {
+    if (!art || !user) return;
+    const price = val ?? prompt("Offer price (ETH)") ?? "";
+    if (!price) return;
+    try {
+      const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/activity/offer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artwork_id: art.id, actor: user.id, price, currency: "ETH" })
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Offer submitted" });
+      setActivity([{ id: Date.now(), kind: "offer", tx_hash: null, created_at: new Date().toISOString(), data: { price, currency: "ETH" } }, ...activity]);
+    } catch (e: any) {
+      toast({ variant: "error", title: "Offer failed", description: String(e?.message || e) });
+    }
+  }
 
-  const rarityMap = useMemo(() => {
-    const m = new Map<string, TraitStat>();
-    for (const s of traitStats) m.set(`${s.trait_type}::${s.value}`, s);
-    return m;
-  }, [traitStats]);
+  async function markSold() {
+    if (!art || !user) return;
+    const price = prompt("Sold price (ETH)") ?? "";
+    if (!price) return;
+    const tx = prompt("Optional tx hash (if sold on-chain)") ?? "";
+    try {
+      const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/activity/sale`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artwork_id: art.id, actor: user.id, price, currency: "ETH", tx_hash: tx || null })
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Sale recorded" });
+      setArt({ ...(art as any), sale_kind: null, sale_price: null });
+      setActivity([{ id: Date.now(), kind: "sale", tx_hash: tx || null, created_at: new Date().toISOString(), data: { price, currency: "ETH" } }, ...activity]);
+    } catch (e: any) {
+      toast({ variant: "error", title: "Record sale failed", description: String(e?.message || e) });
+    }
+  }
 
-  // Early returns AFTER all hooks
-  if (loading) return <Skeleton />;
-  if (err) return <div className="p-6 text-red-400">Error: {err}</div>;
-  if (!art) return <div className="p-6 text-neutral-400">Artwork not found.</div>;
-
-  const title = art.title || meta?.name || "Untitled";
-  const desc = art.description || meta?.description || "";
-  const royaltyPct = ((art.royalty_bps || 0) / 100).toFixed(2);
-  const price = art.sale_kind === "fixed" && art.sale_price ? `${art.sale_price} ${art.sale_currency || "ETH"}` : null;
-  const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
+  // SEO / OG
+  const ogTitle = art?.title || "Artwork";
+  const ogDesc = art?.description || "View artwork on Taedal";
+  const ogImage = art?.media_kind === 'video' ? (art?.cover_url || DEFAULT_COVER_URL) : mediaUrl;
 
   return (
     <div className="mx-auto max-w-6xl p-6">
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Media */}
-        <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950">
-          {media.kind === "video" ? (
-            <video src={media.src} poster={media.poster || undefined} className="h-full w-full" controls playsInline />
-          ) : (
-            <img src={media.src || media.poster} alt={title} className="h-full w-full object-contain" />
-          )}
-        </div>
+      <Helmet>
+        <title>{ogTitle} • Taedal</title>
+        <meta name="description" content={ogDesc} />
+        <meta property="og:title" content={ogTitle} />
+        <meta property="og:description" content={ogDesc} />
+        <meta property="og:image" content={ogImage} />
+        <meta property="og:type" content="article" />
+        <meta property="twitter:card" content="summary_large_image" />
+        <meta property="twitter:title" content={ogTitle} />
+        <meta property="twitter:description" content={ogDesc} />
+        <meta property="twitter:image" content={ogImage} />
+      </Helmet>
 
-        {/* Right rail */}
-        <div>
-          <div className="text-xl font-semibold text-neutral-100">{title}</div>
-          <div className="mt-1 text-sm text-neutral-400">
-            Owned by{" "}
-            {art.owner ? (
-              <Link to={`/u/${art.owner}`} className="text-neutral-200 hover:underline">
-                {art.owner.slice(0, 6)}…{art.owner.slice(-4)}
-              </Link>
+      {loading && <div className="text-neutral-400">Loading…</div>}
+      {!loading && !art && <div className="text-neutral-400">Not found.</div>}
+      {!loading && art && (
+        <div className="grid gap-6 md:grid-cols-[1.1fr,0.9fr]">
+          {/* Media */}
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+            {art.media_kind === "video" ? (
+              <video src={mediaUrl} controls className="w-full rounded-xl" />
             ) : (
-              "unknown"
+              <img src={mediaUrl} className="w-full rounded-xl object-contain" />
             )}
           </div>
 
-          <div className="mt-4 rounded-2xl border border-neutral-800 p-4">
-            <div className="text-sm text-neutral-400">Price</div>
-            <div className="mt-1 text-2xl font-semibold">{price ?? "—"}</div>
-            <div className="mt-3 flex gap-2">
-              <button className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40" disabled={!price}>
-                Buy now
-              </button>
-              <button className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900">Make offer</button>
-            </div>
-            <div className="mt-3 text-xs text-neutral-500">Royalty: {royaltyPct}% • Token ID: {art.token_id ?? "—"}</div>
-          </div>
+          {/* Side panel */}
+          <div>
+            <div className="mb-3 text-2xl font-semibold">{art.title || "Untitled"}</div>
 
-          {/* Tabs */}
-          <div className="mt-6 flex gap-2">
-            {(["details", "activity"] as const).map((t) => (
-              <button
-                key={t}
-                className={`rounded-full border px-3 py-1 text-sm capitalize ${tab === t ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"}`}
-                onClick={() => setTab(t)}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-
-          {tab === "details" && (
-            <div className="mt-4">
-              {desc && (
-                <>
-                  <div className="mb-1 text-sm font-medium text-neutral-200">About</div>
-                  <div className="whitespace-pre-wrap text-sm text-neutral-300">{desc}</div>
-                </>
+            <div className="rounded-2xl border border-neutral-800 p-4">
+              <div className="text-sm text-neutral-400 mb-1">Price</div>
+              {art.sale_kind === "fixed" && art.sale_price ? (
+                <div className="flex items-center gap-3">
+                  <div className="text-lg">{art.sale_price} {art.sale_currency || "ETH"}</div>
+                  <button className="rounded-lg bg-white px-3 py-1.5 text-sm text-black"
+                    onClick={() => doOffer(art.sale_price)}>Buy now</button>
+                  <button className="rounded-lg border border-neutral-700 px-3 py-1.5 text-sm"
+                    onClick={() => doOffer()}>Make offer</button>
+                </div>
+              ) : (
+                <div className="text-neutral-500 text-sm">—</div>
               )}
 
-              {/* Chain details */}
-              <div className="mt-6">
-                <div className="mb-1 text-sm font-medium text-neutral-200">Blockchain details</div>
-                <div className="grid grid-cols-2 gap-2 text-xs text-neutral-400">
-                  <div className="rounded-lg border border-neutral-800 p-2">
-                    <div className="text-neutral-500">Metadata URI</div>
-                    <a className="truncate text-neutral-300 hover:underline" href={ipfsToHttp(art.metadata_url || "")} target="_blank" rel="noreferrer">
-                      {art.metadata_url || "—"}
-                    </a>
-                  </div>
-                  <div className="rounded-lg border border-neutral-800 p-2">
-                    <div className="text-neutral-500">Tx hash</div>
-                    <div className="truncate text-neutral-300">{art.tx_hash || "—"}</div>
+              {/* Owner controls */}
+              {isOwner && (
+                <div className="mt-4 space-y-2">
+                  <div className="text-xs text-neutral-400">Owner controls</div>
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      step="0.0001"
+                      placeholder="List price (ETH)"
+                      value={listPrice}
+                      onChange={(e)=>setListPrice(e.target.value)}
+                      className="w-40 rounded-xl border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
+                    />
+                    <button onClick={doList} className="rounded-lg bg-white px-3 py-1.5 text-sm text-black">List</button>
+                    <button onClick={doUnlist} className="rounded-lg border border-neutral-700 px-3 py-1.5 text-sm">Unlist</button>
+                    <button onClick={markSold} className="rounded-lg border border-neutral-700 px-3 py-1.5 text-sm">Mark sold</button>
                   </div>
                 </div>
-              </div>
-            </div>
-          )}
-
-          {tab === "activity" && (
-            <div className="mt-4 space-y-2">
-              {acts.length === 0 ? (
-                <div className="text-sm text-neutral-400">No activity yet.</div>
-              ) : (
-                acts.map((a) => (
-                  <div key={a.id} className="flex items-center justify-between rounded-xl border border-neutral-800 p-3 text-sm">
-                    <div className="flex items-center gap-2">
-                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize">{a.kind}</span>
-                      <span className="text-neutral-300">{a.actor ? `${a.actor.slice(0, 6)}…${a.actor.slice(-4)}` : "Someone"}</span>
-                    </div>
-                    <div className="text-right">
-                      {a.price_eth ? <div className="text-neutral-200">{a.price_eth} ETH</div> : null}
-                      <div className="text-xs text-neutral-500">
-                        {new Date(a.created_at).toLocaleString()}
-                        {a.tx_hash ? ` • ${a.tx_hash.slice(0, 8)}…` : ""}
-                      </div>
-                    </div>
-                  </div>
-                ))
               )}
             </div>
-          )}
-        </div>
-      </div>
 
-      {/* Traits with rarity pills */}
-      <div className="mt-8">
-        <div className="mb-2 text-lg font-semibold">Traits</div>
-        {attributes.length ? (
-          <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-            {attributes.map((t, i) => {
-              const key = `${t.trait_type}::${String(t.value)}`;
-              const s = rarityMap.get(key);
-              const pct = s ? Math.round((s.freq || 0) * 1000) / 10 : null; // e.g., 12.3%
-              return (
-                <li key={i} className="rounded-xl border border-neutral-800 p-3">
-                  <div className="flex items-center justify-between">
+            <div className="mt-4 rounded-2xl border border-neutral-800 p-4">
+              <div className="text-sm text-neutral-400 mb-1">About</div>
+              <div className="text-sm">{art.description || "—"}</div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-neutral-800 p-4 text-sm">
+              <div className="text-neutral-400 mb-2">Blockchain details</div>
+              <div className="flex flex-col gap-2">
+                <div className="truncate"><span className="text-neutral-400 mr-2">Metadata URI</span>{art.metadata_url || "—"}</div>
+                <div className="truncate"><span className="text-neutral-400 mr-2">Tx hash</span>{art.tx_hash || "—"}</div>
+                <div className="truncate"><span className="text-neutral-400 mr-2">Token ID</span>{art.token_id || "—"}</div>
+                <div className="truncate"><span className="text-neutral-400 mr-2">Royalty</span>{((art.royalty_bps || 0)/100).toFixed(2)}%</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Traits */}
+          <div className="md:col-span-2 mt-2">
+            <h2 className="mb-2 text-lg font-semibold">Traits</h2>
+            {attrs.length === 0 ? (
+              <div className="text-sm text-neutral-500">No traits.</div>
+            ) : (
+              <ul className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
+                {attrs.map((t, i) => (
+                  <li key={i} className="rounded-xl border border-neutral-800 p-3">
+                    <div className="text-xs text-neutral-400">{t.trait_type}</div>
+                    <div className="text-neutral-200">{t.value}</div>
+                    {/* Optionally you can fetch rarity here from trait_stats_mat */}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Activity */}
+          <div className="md:col-span-2 mt-6">
+            <h2 className="mb-2 text-lg font-semibold">Activity</h2>
+            {activity.length === 0 ? (
+              <div className="text-sm text-neutral-500">No activity yet.</div>
+            ) : (
+              <ul className="space-y-2">
+                {activity.map(a => (
+                  <li key={a.id} className="rounded-xl border border-neutral-800 p-3 text-sm flex items-center justify-between">
                     <div>
-                      <div className="text-xs uppercase tracking-wide text-neutral-500">{t.trait_type}</div>
-                      <div className="text-sm text-neutral-200">{String(t.value)}</div>
+                      <span className="capitalize font-medium">{a.kind}</span>
+                      {a.data?.price ? <span className="ml-2 text-neutral-400">{a.data.price} {a.data.currency || 'ETH'}</span> : null}
+                      {a.tx_hash ? <span className="ml-2 text-neutral-500 truncate">tx {a.tx_hash}</span> : null}
                     </div>
-                    <div className="text-right">
-                      {pct !== null ? (
-                        <>
-                          <div className="text-xs text-neutral-400">{pct}%</div>
-                          <div className="text-[11px] text-neutral-500">{s?.count ?? 0} of {s?.total ?? 0}</div>
-                        </>
-                      ) : (
-                        <div className="text-xs text-neutral-500">—</div>
-                      )}
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        ) : (
-          <div className="text-sm text-neutral-400">No traits.</div>
-        )}
-      </div>
+                    <div className="text-xs text-neutral-500">{new Date(a.created_at).toLocaleString()}</div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

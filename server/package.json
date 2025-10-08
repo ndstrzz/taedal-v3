@@ -17,7 +17,8 @@
   },
   "scripts": {
     "build": "echo \"no build step for API\"",
-    "start": "node index.js"
+    "start": "node index.js",
+    "watch:activity": "node scripts/activity_watcher.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"

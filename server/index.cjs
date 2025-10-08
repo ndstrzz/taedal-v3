@@ -265,6 +265,113 @@ app.post('/api/verify', upload.any(), async (req, res) => {
     clearTimeout(softTimer);
   }
 });
+// ---- Off-chain listing / activity endpoints (simple) ----------------------
+// NOTE: these do NOT transfer ownership on-chain; they only record intent/activity.
+// Expect Authorization: Bearer <supabase anon or service JWT> via client if you want to gate.
+// For a lightweight approach we accept public, but tie writes to user IDs sent by client.
+
+app.post('/api/activity/list', express.json(), async (req, res) => {
+  try {
+    const { artwork_id, actor, price, currency='ETH' } = req.body || {};
+    if (!artwork_id || !actor) return res.status(400).json({ error: 'artwork_id & actor required' });
+
+    if (!sb) return res.status(500).json({ error: 'Supabase not configured' });
+
+    // set artwork sale fields
+    const { error: upErr } = await sb.from('artworks').update({
+      sale_kind: 'fixed',
+      sale_currency: currency,
+      sale_price: price
+    }).eq('id', artwork_id);
+    if (upErr) throw upErr;
+
+    const { error: actErr } = await sb.from('activity').insert({
+      artwork_id, actor, kind: 'list', data: { price, currency }
+    });
+    if (actErr) throw actErr;
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[list] error', e);
+    res.status(500).json({ error: 'list failed', details: e.message });
+  }
+});
+
+app.post('/api/activity/unlist', express.json(), async (req, res) => {
+  try {
+    const { artwork_id, actor } = req.body || {};
+    if (!artwork_id || !actor) return res.status(400).json({ error: 'artwork_id & actor required' });
+
+    const { error: upErr } = await sb.from('artworks').update({
+      sale_kind: null,
+      sale_price: null
+    }).eq('id', artwork_id);
+    if (upErr) throw upErr;
+
+    const { error: actErr } = await sb.from('activity').insert({
+      artwork_id, actor, kind: 'unlist'
+    });
+    if (actErr) throw actErr;
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[unlist] error', e);
+    res.status(500).json({ error: 'unlist failed', details: e.message });
+  }
+});
+
+app.post('/api/activity/offer', express.json(), async (req, res) => {
+  try {
+    const { artwork_id, actor, price, currency='ETH' } = req.body || {};
+    if (!artwork_id || !actor || !price) return res.status(400).json({ error: 'artwork_id, actor, price required' });
+
+    const { error: actErr } = await sb.from('activity').insert({
+      artwork_id, actor, kind: 'offer', data: { price, currency }
+    });
+    if (actErr) throw actErr;
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[offer] error', e);
+    res.status(500).json({ error: 'offer failed', details: e.message });
+  }
+});
+
+// "sale" logger: owner marks as sold and optionally includes tx_hash
+app.post('/api/activity/sale', express.json(), async (req, res) => {
+  try {
+    const { artwork_id, actor, price, currency='ETH', tx_hash } = req.body || {};
+    if (!artwork_id || !actor || !price) return res.status(400).json({ error: 'artwork_id, actor, price required' });
+
+    // Clear listing on artwork
+    const { error: upErr } = await sb.from('artworks').update({
+      sale_kind: null,
+      sale_price: null
+    }).eq('id', artwork_id);
+    if (upErr) throw upErr;
+
+    const { error: actErr } = await sb.from('activity').insert({
+      artwork_id, actor, kind: 'sale', tx_hash, data: { price, currency }
+    });
+    if (actErr) throw actErr;
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[sale] error', e);
+    res.status(500).json({ error: 'sale failed', details: e.message });
+  }
+});
+app.post('/api/admin/refresh-traits', async (_req, res) => {
+  try {
+    if (!sb) return res.status(500).json({ error: 'Supabase not configured' });
+    const { error } = await sb.rpc('refresh_trait_stats_mat');
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[refresh-traits] error', e);
+    res.status(500).json({ error: 'refresh failed', details: e.message });
+  }
+});
 
 // ---- Start ----------------------------------------------------------------
 

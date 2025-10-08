@@ -1,103 +1,64 @@
-// scripts/backfill-traits.mjs
-import path from "path";
-import { fileURLToPath } from "url";
-import dotenv from "dotenv";
-import { createClient } from "@supabase/supabase-js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.join(__dirname, "../server/.env") });
+#!/usr/bin/env node
+import 'dotenv/config';
+import fetch from 'node-fetch';
+import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SERVICE_ROLE_KEY =
-  process.env.SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
-
-if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
-  console.error("Missing SUPABASE_URL or key in env");
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY; // service role ONLY
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  console.error('Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env');
   process.exit(1);
 }
+const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-const sb = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
-
-function ipfsToHttp(uri, gw = "https://ipfs.io/ipfs/") {
-  if (!uri) return "";
-  const s = String(uri);
-  if (s.startsWith("ipfs://")) return gw + s.slice(7);
-  if (s.includes("gateway.pinata.cloud/ipfs/")) {
-    return s.replace("https://gateway.pinata.cloud/ipfs/", gw);
+function ipfsToHttp(uri) {
+  if (!uri) return '';
+  if (uri.startsWith('ipfs://')) return 'https://ipfs.io/ipfs/' + uri.slice(7);
+  if (uri.includes('gateway.pinata.cloud/ipfs/')) {
+    return uri.replace('https://gateway.pinata.cloud/ipfs/', 'https://ipfs.io/ipfs/');
   }
-  return s;
-}
-
-async function fetchJson(url) {
-  const r = await fetch(url, { redirect: "follow" }); // ← Node 20 global fetch
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
+  return uri;
 }
 
 async function main() {
-  console.log("Fetching published artworks…");
-  const { data: arts, error: artErr } = await sb
-    .from("artworks")
-    .select("id, metadata_url, status")
-    .eq("status", "published");
+  console.log('[backfill] start');
 
-  if (artErr) throw artErr;
+  // get published artworks missing attributes
+  const { data: rows, error } = await sb
+    .from('artworks')
+    .select('id, metadata_url')
+    .eq('status', 'published');
+  if (error) throw error;
 
-  let ok = 0,
-    fail = 0,
-    skipped = 0;
-
-  for (const a of arts) {
+  let added = 0;
+  for (const row of rows) {
+    const url = ipfsToHttp(row.metadata_url);
+    if (!url) continue;
     try {
-      const metaUrl = ipfsToHttp(a.metadata_url);
-      if (!metaUrl) {
-        skipped++;
-        continue;
-      }
-
-      const meta = await fetchJson(metaUrl);
-      const attrs = Array.isArray(meta?.attributes) ? meta.attributes : [];
-
-      const rows = attrs
-        .map((t) => ({
-          artwork_id: a.id,
-          trait_type: String(t.trait_type ?? "").trim(),
-          value: String(t.value ?? "").trim(),
+      const r = await fetch(url, { timeout: 15000 });
+      if (!r.ok) { console.warn('bad metadata', row.id, r.status); continue; }
+      const j = await r.json();
+      const attrs = Array.isArray(j.attributes) ? j.attributes : [];
+      const toInsert = attrs
+        .map(a => ({
+          artwork_id: row.id,
+          trait_type: String(a.trait_type ?? '').trim(),
+          value: String(a.value ?? '').trim(),
         }))
-        .filter((r) => r.trait_type && r.value);
+        .filter(a => a.trait_type && a.value);
 
-      // wipe then insert (simple backfill approach)
-      await sb.from("artwork_attributes").delete().eq("artwork_id", a.id);
-      if (rows.length) {
-        const { error } = await sb.from("artwork_attributes").insert(rows);
-        if (error) throw error;
+      if (toInsert.length) {
+        const { error: insErr } = await sb
+          .from('artwork_attributes')
+          .upsert(toInsert, { onConflict: 'artwork_id,trait_type,value' });
+        if (insErr) console.error('upsert error', row.id, insErr);
+        else added += toInsert.length;
       }
-
-      process.stdout.write(".");
-      ok++;
     } catch (e) {
-      console.error(`\n[${a.id}] backfill failed:`, e.message || e);
-      fail++;
+      console.warn('fetch fail', row.id, e.message);
     }
   }
-
-  console.log(`\nDone. ok=${ok} fail=${fail} skipped=${skipped}`);
-
-  // refresh the MV (works because function is SECURITY DEFINER)
-  const { error: refreshErr } = await sb.rpc("refresh_trait_stats_mv");
-  if (refreshErr) {
-    console.warn(
-      "refresh_trait_stats_mv failed (safe to ignore while testing):",
-      refreshErr.message
-    );
-  } else {
-    console.log("Refreshed trait_stats_mv.");
-  }
+  console.log(`[backfill] done. inserted/updated ${added} trait rows`);
 }
 
-main().catch((e) => {
-  console.error("Fatal:", e?.message || e);
-  process.exit(1);
-});
+main().catch(e => { console.error(e); process.exit(1); });
