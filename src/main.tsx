@@ -6,9 +6,8 @@ import "./index.css";
 import { ToastProvider } from "./components/Toaster";
 import { AuthProvider } from "./state/AuthContext";
 
-import { initSentry } from "./sentry";   // <-- correct relative path
 
-initSentry();
+
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
