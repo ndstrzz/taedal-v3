@@ -152,3 +152,8 @@ export async function mintWithMetaMask(
 
   return { txHash: receipt.hash, tokenId, minter: address };
 }
+
+export function txExplorerUrl(chainId: number, txHash: string) {
+  const host = Number(chainId) === 11155111 ? "sepolia.etherscan.io" : "etherscan.io";
+  return `https://${host}/tx/${txHash}`;
+}
