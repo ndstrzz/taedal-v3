@@ -4,6 +4,15 @@ import { supabase } from "../lib/supabase";
 import { ipfsToHttp } from "../lib/ipfs-url";
 import { DEFAULT_COVER_URL } from "../lib/config";
 
+type Attribute = { trait_type: string; value: string | number };
+type Metadata = {
+  name?: string;
+  description?: string;
+  image?: string;           // ipfs://... or http(s)
+  animation_url?: string;   // ipfs://... or http(s)
+  attributes?: Attribute[];
+};
+
 type Artwork = {
   id: string;
   title: string | null;
@@ -20,7 +29,6 @@ type Artwork = {
   sale_kind: "fixed" | "auction" | null;
   sale_price: string | null;
   sale_currency: "ETH" | "WETH" | null;
-  attributes: Array<{ trait_type: string; value: string | number }> | null; // if you store inside metadata fetch later
   created_at: string;
 };
 
@@ -42,10 +50,13 @@ function Skeleton() {
 
 export default function ArtworkDetail() {
   const { id } = useParams<{ id: string }>();
+
   const [art, setArt] = useState<Artwork | null>(null);
+  const [meta, setMeta] = useState<Metadata | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
+  // 1) Load the artwork row
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -69,30 +80,64 @@ export default function ArtworkDetail() {
     };
   }, [id]);
 
+  // 2) Fetch metadata JSON (traits, image/animation fallbacks)
+  useEffect(() => {
+    let aborted = false;
+    (async () => {
+      if (!art?.metadata_url) return setMeta(null);
+      try {
+        const url = ipfsToHttp(art.metadata_url);
+        const r = await fetch(url, { cache: "no-store" });
+        if (!r.ok) throw new Error(`Metadata HTTP ${r.status}`);
+        const j = (await r.json()) as Metadata;
+        if (!aborted) setMeta(j || null);
+      } catch (e) {
+        console.warn("[metadata] fetch failed:", e);
+        if (!aborted) setMeta(null);
+      }
+    })();
+    return () => { aborted = true; };
+  }, [art?.metadata_url]);
+
+  // 3) Decide which media to show (DB CIDs first, then metadata)
   const media = useMemo(() => {
-    if (!art) return { kind: "image", poster: DEFAULT_COVER_URL, src: "" } as const;
+    if (!art) {
+      return { kind: "image" as const, poster: DEFAULT_COVER_URL, src: "" };
+    }
 
     const poster = art.cover_url || DEFAULT_COVER_URL;
+
+    // Prefer DB-provided CIDs
     if (art.media_kind === "video" && art.animation_cid) {
-      const src = ipfsToHttp(`ipfs://${art.animation_cid}`);
-      return { kind: "video", poster, src } as const;
+      return { kind: "video" as const, poster, src: ipfsToHttp(`ipfs://${art.animation_cid}`) };
     }
-
     if (art.image_cid) {
-      return { kind: "image", poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) } as const;
+      return { kind: "image" as const, poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) };
     }
 
-    // fallback to cover
-    return { kind: "image", poster, src: poster } as const;
-  }, [art]);
+    // Fallback to metadata
+    const metaAnim = meta?.animation_url ? ipfsToHttp(meta.animation_url) : "";
+    const metaImg  = meta?.image ? ipfsToHttp(meta.image) : "";
+
+    if (metaAnim) return { kind: "video" as const, poster, src: metaAnim };
+    if (metaImg)  return { kind: "image" as const, poster, src: metaImg };
+
+    return { kind: "image" as const, poster, src: poster };
+  }, [art, meta]);
 
   if (loading) return <Skeleton />;
   if (err) return <div className="p-6 text-red-400">Error: {err}</div>;
   if (!art) return <div className="p-6 text-neutral-400">Artwork not found.</div>;
 
-  const title = art.title || "Untitled";
+  const title = art.title || meta?.name || "Untitled";
+  const desc  = art.description || meta?.description || "";
   const royaltyPct = ((art.royalty_bps || 0) / 100).toFixed(2);
-  const price = art.sale_kind === "fixed" && art.sale_price ? `${art.sale_price} ${art.sale_currency || "ETH"}` : null;
+  const price =
+    art.sale_kind === "fixed" && art.sale_price
+      ? `${art.sale_price} ${art.sale_currency || "ETH"}`
+      : null;
+
+  const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
 
   return (
     <div className="mx-auto max-w-6xl p-6">
@@ -160,11 +205,11 @@ export default function ArtworkDetail() {
           </div>
 
           {/* Description */}
-          {art.description && (
+          {desc && (
             <div className="mt-6">
               <div className="mb-1 text-sm font-medium text-neutral-200">About</div>
               <div className="whitespace-pre-wrap text-sm text-neutral-300">
-                {art.description}
+                {desc}
               </div>
             </div>
           )}
@@ -175,7 +220,12 @@ export default function ArtworkDetail() {
             <div className="grid grid-cols-2 gap-2 text-xs text-neutral-400">
               <div className="rounded-lg border border-neutral-800 p-2">
                 <div className="text-neutral-500">Metadata URI</div>
-                <a className="truncate text-neutral-300 hover:underline" href={ipfsToHttp(art.metadata_url || "")} target="_blank" rel="noreferrer">
+                <a
+                  className="truncate text-neutral-300 hover:underline"
+                  href={ipfsToHttp(art.metadata_url || "")}
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   {art.metadata_url || "—"}
                 </a>
               </div>
@@ -191,18 +241,16 @@ export default function ArtworkDetail() {
       {/* Traits */}
       <div className="mt-8">
         <div className="mb-2 text-lg font-semibold">Traits</div>
-        {Array.isArray((art as any).attributes) && (art as any).attributes.length ? (
+        {attributes.length ? (
           <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-            {(art as any).attributes.map(
-              (t: { trait_type: string; value: string | number }, i: number) => (
-                <li key={i} className="rounded-xl border border-neutral-800 p-3">
-                  <div className="text-xs uppercase tracking-wide text-neutral-500">
-                    {t.trait_type}
-                  </div>
-                  <div className="text-sm text-neutral-200">{String(t.value)}</div>
-                </li>
-              )
-            )}
+            {attributes.map((t, i) => (
+              <li key={i} className="rounded-xl border border-neutral-800 p-3">
+                <div className="text-xs uppercase tracking-wide text-neutral-500">
+                  {t.trait_type}
+                </div>
+                <div className="text-sm text-neutral-200">{String(t.value)}</div>
+              </li>
+            ))}
           </ul>
         ) : (
           <div className="text-sm text-neutral-400">No traits.</div>
