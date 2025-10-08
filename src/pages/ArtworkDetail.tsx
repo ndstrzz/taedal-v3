@@ -4,8 +4,8 @@ import { useParams, Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { ipfsToHttp } from "../lib/ipfs-url";
 import { DEFAULT_COVER_URL } from "../lib/config";
-import BuyNowModal from "../components/BuyNowModal";
 import MakeOfferModal from "../components/MakeOfferModal";
+import CheckoutModal from "../components/CheckoutModal";
 
 type Attribute = { trait_type: string; value: string | number };
 type Metadata = {
@@ -102,7 +102,7 @@ export default function ArtworkDetail() {
   const [listing, setListing] = useState<Listing | null>(null);
   const [bestOffer, setBestOffer] = useState<BestOffer | null>(null);
 
-  const [showBuy, setShowBuy] = useState(false);
+  const [showCheckout, setShowCheckout] = useState(false);
   const [showOffer, setShowOffer] = useState(false);
 
   // 1) Load artwork
@@ -149,7 +149,7 @@ export default function ArtworkDetail() {
     };
   }, [art?.metadata_url]);
 
-  // 3) Activity for this artwork
+  // 3) Activity
   async function fetchActivity(artworkId: string) {
     const { data } = await supabase
       .from("activity")
@@ -162,7 +162,7 @@ export default function ArtworkDetail() {
     if (art?.id) fetchActivity(art.id);
   }, [art?.id]);
 
-  // 4) Rarity stats — prefer view "trait_stats", fall back to MV "trait_stats_mv"
+  // 4) Rarity stats — view "trait_stats", fallback "trait_stats_mv"
   useEffect(() => {
     (async () => {
       let { data, error } = await supabase.from("trait_stats").select("*");
@@ -174,7 +174,7 @@ export default function ArtworkDetail() {
     })();
   }, []);
 
-  // 5) Active listing — prefer helper view, fall back to listings table
+  // 5) Active listing — helper view → table fallback
   async function fetchListing(artworkId: string) {
     const viaView = await supabase
       .from("v_active_listing")
@@ -214,7 +214,7 @@ export default function ArtworkDetail() {
     })();
   }, [id]);
 
-  // Refetch everything after a write (buy/offer)
+  // Refetch after writes
   async function refetchAll() {
     if (!id) return;
     await Promise.all([fetchListing(id), fetchActivity(id)]);
@@ -255,16 +255,13 @@ export default function ArtworkDetail() {
   const desc = art.description || meta?.description || "";
   const royaltyPct = ((art.royalty_bps || 0) / 100).toFixed(2);
 
-  // Prefer off-chain active listing price if present, else on-chain-ish sale_* fields
-  const displayPrice =
-    listing?.price
-      ? `${listing.price} ${listing.currency || "ETH"}`
-      : art.sale_kind === "fixed" && art.sale_price
-      ? `${art.sale_price} ${art.sale_currency || "ETH"}`
-      : null;
-
   const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
+
+  // Prefer off-chain listing price first
   const listingId = listing?.listing_id || listing?.id || null;
+  const currentPrice = listing?.price ?? art.sale_price ?? "";
+  const currentCurrency = (listing?.currency || art.sale_currency || "ETH") as "ETH" | "WETH" | "USD";
+  const displayPrice = currentPrice ? `${currentPrice} ${currentCurrency}` : null;
 
   return (
     <div className="mx-auto max-w-6xl p-6">
@@ -272,19 +269,9 @@ export default function ArtworkDetail() {
         {/* Media */}
         <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950">
           {media.kind === "video" ? (
-            <video
-              src={media.src}
-              poster={media.poster || undefined}
-              className="h-full w-full"
-              controls
-              playsInline
-            />
+            <video src={media.src} poster={media.poster || undefined} className="h-full w-full" controls playsInline />
           ) : (
-            <img
-              src={media.src || media.poster}
-              alt={title}
-              className="h-full w-full object-contain"
-            />
+            <img src={media.src || media.poster} alt={title} className="h-full w-full object-contain" />
           )}
         </div>
 
@@ -308,10 +295,7 @@ export default function ArtworkDetail() {
 
             {bestOffer ? (
               <div className="mt-2 text-sm text-neutral-400">
-                Best offer:{" "}
-                <span className="text-neutral-200">
-                  {bestOffer.price} {bestOffer.currency}
-                </span>
+                Best offer: <span className="text-neutral-200">{bestOffer.price} {bestOffer.currency}</span>
               </div>
             ) : null}
 
@@ -319,7 +303,7 @@ export default function ArtworkDetail() {
               <button
                 className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
                 disabled={!displayPrice || !listingId}
-                onClick={() => setShowBuy(true)}
+                onClick={() => setShowCheckout(true)}
               >
                 Buy now
               </button>
@@ -365,12 +349,7 @@ export default function ArtworkDetail() {
                 <div className="grid grid-cols-2 gap-2 text-xs text-neutral-400">
                   <div className="rounded-lg border border-neutral-800 p-2">
                     <div className="text-neutral-500">Metadata URI</div>
-                    <a
-                      className="truncate text-neutral-300 hover:underline"
-                      href={ipfsToHttp(art.metadata_url || "")}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
+                    <a className="truncate text-neutral-300 hover:underline" href={ipfsToHttp(art.metadata_url || "")} target="_blank" rel="noreferrer">
                       {art.metadata_url || "—"}
                     </a>
                   </div>
@@ -389,17 +368,10 @@ export default function ArtworkDetail() {
                 <div className="text-sm text-neutral-400">No activity yet.</div>
               ) : (
                 acts.map((a) => (
-                  <div
-                    key={a.id}
-                    className="flex items-center justify-between rounded-xl border border-neutral-800 p-3 text-sm"
-                  >
+                  <div key={a.id} className="flex items-center justify-between rounded-xl border border-neutral-800 p-3 text-sm">
                     <div className="flex items-center gap-2">
-                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize">
-                        {a.kind}
-                      </span>
-                      <span className="text-neutral-300">
-                        {a.actor ? `${a.actor.slice(0, 6)}…${a.actor.slice(-4)}` : "Someone"}
-                      </span>
+                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize">{a.kind}</span>
+                      <span className="text-neutral-300">{a.actor ? `${a.actor.slice(0, 6)}…${a.actor.slice(-4)}` : "Someone"}</span>
                     </div>
                     <div className="text-right">
                       {a.price_eth ? <div className="text-neutral-200">{a.price_eth} ETH</div> : null}
@@ -436,9 +408,7 @@ export default function ArtworkDetail() {
                       {pct !== null ? (
                         <>
                           <div className="text-xs text-neutral-400">{pct}%</div>
-                          <div className="text-[11px] text-neutral-500">
-                            {s?.count ?? 0} of {s?.total ?? 0}
-                          </div>
+                          <div className="text-[11px] text-neutral-500">{s?.count ?? 0} of {s?.total ?? 0}</div>
                         </>
                       ) : (
                         <div className="text-xs text-neutral-500">—</div>
@@ -455,14 +425,17 @@ export default function ArtworkDetail() {
       </div>
 
       {/* Modals */}
-      {showBuy && listing && listingId && (
-        <BuyNowModal
+      {showCheckout && listing && listingId && (
+        <CheckoutModal
+          open={showCheckout}
+          onClose={() => setShowCheckout(false)}
+          onPurchased={refetchAll}
           artworkId={art.id}
           listingId={listingId}
-          defaultPrice={String(listing.price ?? "")}
-          defaultCurrency={listing.currency || "ETH"}
-          onClose={() => setShowBuy(false)}
-          onDone={refetchAll}
+          title={title}
+          price={String(currentPrice)}
+          currency={currentCurrency}
+          imageUrl={media.kind === "image" ? (media.src || media.poster) : media.poster}
         />
       )}
       {showOffer && (

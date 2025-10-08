@@ -28,6 +28,9 @@ const sb =
     : null
 
 // ---- CORS (allow localhost & *.vercel.app & render) ----------------------
+const checkoutRouter = require("./server/checkout.cjs");
+app.use("/api/checkout", checkoutRouter);
+
 
 const allowlist = [
   'http://localhost:5173',
