@@ -18,11 +18,19 @@ type Props = {
 
 type Method = "card" | "crypto";
 
+// Publishable key is provided at build-time (Vite env)
 const STRIPE_PK = import.meta.env.VITE_STRIPE_PUBKEY as string | undefined;
 
 export default function CheckoutModal({
-  open, onClose, onPurchased,
-  artworkId, listingId, title, price, currency, imageUrl
+  open,
+  onClose,
+  onPurchased,
+  artworkId,
+  listingId,
+  title,
+  price,
+  currency,
+  imageUrl,
 }: Props) {
   const { toast } = useToast();
   const [method, setMethod] = useState<Method>("card");
@@ -38,7 +46,11 @@ export default function CheckoutModal({
   async function handleCardCheckout() {
     try {
       if (!STRIPE_PK) {
-        toast({ variant: "error", title: "Stripe not configured", description: "Set VITE_STRIPE_PUBKEY" });
+        toast({
+          variant: "error",
+          title: "Stripe not configured",
+          description: "Set VITE_STRIPE_PUBKEY in your environment.",
+        });
         return;
       }
       setBusy(true);
@@ -51,12 +63,19 @@ export default function CheckoutModal({
       if (!r.ok) throw new Error(`Failed (${r.status})`);
       const { sessionId } = await r.json();
 
-      const stripe = await loadStripe(STRIPE_PK);
+      // Non-null assertion is safe because we guard above
+      const stripe = await loadStripe(STRIPE_PK!);
       if (!stripe) throw new Error("Stripe failed to load");
-      const { error } = await stripe.redirectToCheckout({ sessionId });
+
+      // Some setups have mismatched types; cast to any to avoid TS error:
+      const { error } = await (stripe as any).redirectToCheckout({ sessionId });
       if (error) throw error;
     } catch (e: any) {
-      toast({ variant: "error", title: "Card checkout failed", description: String(e?.message || e) });
+      toast({
+        variant: "error",
+        title: "Card checkout failed",
+        description: String(e?.message || e),
+      });
       setBusy(false);
     }
   }
@@ -72,7 +91,7 @@ export default function CheckoutModal({
       if (!r.ok) throw new Error(`Failed (${r.status})`);
       const { hostedUrl, chargeId } = await r.json();
 
-      // record a pending order row (optional)
+      // Optional: store a local "pending" order so UI can reflect the flow
       await supabase.from("orders").insert({
         artwork_id: artworkId,
         listing_id: listingId,
@@ -85,11 +104,16 @@ export default function CheckoutModal({
 
       window.location.href = hostedUrl;
     } catch (e: any) {
-      toast({ variant: "error", title: "Crypto checkout failed", description: String(e?.message || e) });
+      toast({
+        variant: "error",
+        title: "Crypto checkout failed",
+        description: String(e?.message || e),
+      });
       setBusy(false);
     }
   }
 
+  // Local-only helper to complete flow without an external PSP
   async function simulateSuccess() {
     try {
       setBusy(true);
@@ -105,7 +129,11 @@ export default function CheckoutModal({
       await onPurchased?.();
       onClose();
     } catch (e: any) {
-      toast({ variant: "error", title: "Simulate failed", description: String(e?.message || e) });
+      toast({
+        variant: "error",
+        title: "Simulate failed",
+        description: String(e?.message || e),
+      });
     } finally {
       setBusy(false);
     }
@@ -125,14 +153,18 @@ export default function CheckoutModal({
 
         <div className="flex gap-2 border-b border-neutral-800 p-3">
           <button
-            className={`rounded-full border px-3 py-1 text-sm ${method==="card"?"border-neutral-500":"border-neutral-800 hover:bg-neutral-900"}`}
-            onClick={()=>setMethod("card")}
+            className={`rounded-full border px-3 py-1 text-sm ${
+              method === "card" ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"
+            }`}
+            onClick={() => setMethod("card")}
           >
             Card / Apple Pay
           </button>
           <button
-            className={`rounded-full border px-3 py-1 text-sm ${method==="crypto"?"border-neutral-500":"border-neutral-800 hover:bg-neutral-900"}`}
-            onClick={()=>setMethod("crypto")}
+            className={`rounded-full border px-3 py-1 text-sm ${
+              method === "crypto" ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"
+            }`}
+            onClick={() => setMethod("crypto")}
           >
             Crypto
           </button>
@@ -141,27 +173,47 @@ export default function CheckoutModal({
         {method === "card" ? (
           <div className="space-y-3 p-4 text-sm">
             <div className="text-neutral-300">Pay securely with Stripe Checkout.</div>
-            <button disabled={busy} onClick={handleCardCheckout} className="w-full rounded-xl bg-white px-4 py-2 font-medium text-black disabled:opacity-60">
+            <button
+              disabled={busy}
+              onClick={handleCardCheckout}
+              className="w-full rounded-xl bg-white px-4 py-2 font-medium text-black disabled:opacity-60"
+            >
               Continue to Stripe
             </button>
-            <button disabled={busy} onClick={simulateSuccess} className="w-full rounded-xl border border-neutral-700 px-4 py-2 hover:bg-neutral-900">
+            <button
+              disabled={busy}
+              onClick={simulateSuccess}
+              className="w-full rounded-xl border border-neutral-700 px-4 py-2 hover:bg-neutral-900"
+            >
               Simulate success (local)
             </button>
           </div>
         ) : (
           <div className="space-y-3 p-4 text-sm">
             <div className="text-neutral-300">Use a hosted crypto checkout (e.g., Coinbase Commerce).</div>
-            <button disabled={busy} onClick={handleCryptoCheckout} className="w-full rounded-xl bg-white px-4 py-2 font-medium text-black disabled:opacity-60">
+            <button
+              disabled={busy}
+              onClick={handleCryptoCheckout}
+              className="w-full rounded-xl bg-white px-4 py-2 font-medium text-black disabled:opacity-60"
+            >
               Continue to Crypto Checkout
             </button>
-            <button disabled={busy} onClick={simulateSuccess} className="w-full rounded-xl border border-neutral-700 px-4 py-2 hover:bg-neutral-900">
+            <button
+              disabled={busy}
+              onClick={simulateSuccess}
+              className="w-full rounded-xl border border-neutral-700 px-4 py-2 hover:bg-neutral-900"
+            >
               Simulate success (local)
             </button>
           </div>
         )}
 
         <div className="flex items-center justify-end gap-2 border-t border-neutral-800 p-3">
-          <button onClick={onClose} className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900" disabled={busy}>
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
+            disabled={busy}
+          >
             Cancel
           </button>
         </div>
