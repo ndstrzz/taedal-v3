@@ -18,7 +18,8 @@
   "scripts": {
     "build": "echo \"no build step for API\"",
     "start": "node index.js",
-    "watch:activity": "node scripts/activity_watcher.mjs"
+    "watch:activity": "node scripts/activity_watcher.mjs",
+    "backfill:traits": "node scripts/backfill-traits.cjs"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"

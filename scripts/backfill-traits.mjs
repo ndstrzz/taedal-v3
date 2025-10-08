@@ -1,62 +1,87 @@
+#!/usr/bin/env node
 // scripts/backfill-traits.mjs
-import 'dotenv/config';
-import fetch from 'node-fetch';
 import { createClient } from '@supabase/supabase-js';
 
-const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+// Node 18+ has global fetch; no need for node-fetch
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const ipfsToHttp = (uri) =>
-  !uri ? '' :
-  uri.startsWith('ipfs://') ? 'https://ipfs.io/ipfs/' + uri.replace('ipfs://','') : uri;
-
-async function run() {
-  const { data: arts, error } = await sb
-    .from('artworks')
-    .select('id, owner, metadata_url')
-    .eq('status','published')
-    .order('created_at', { ascending: true });
-  if (error) throw error;
-
-  let inserted = 0;
-  for (const a of (arts || [])) {
-    if (!a.metadata_url) continue;
-
-    // Check if already has attributes
-    const { data: existing, error: e2 } = await sb
-      .from('artwork_attributes')
-      .select('artwork_id', { count: 'exact', head: true })
-      .eq('artwork_id', a.id);
-    if (e2) throw e2;
-    if (existing && existing.length) continue;
-
-    const url = ipfsToHttp(a.metadata_url);
-    try {
-      const res = await fetch(url, { timeout: 20000 });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const meta = await res.json();
-
-      const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
-      const rows = attrs
-        .map(t => ({
-          artwork_id: a.id,
-          trait_type: String(t.trait_type ?? t.traitType ?? '').trim(),
-          value: String(t.value ?? '').trim()
-        }))
-        .filter(r => r.trait_type && r.value);
-
-      if (rows.length) {
-        const { error: insErr } = await sb.from('artwork_attributes').insert(rows);
-        if (insErr) throw insErr;
-        inserted += rows.length;
-        console.log(`+ ${a.id} (${rows.length} traits)`);
-      }
-      await sleep(250);
-    } catch (e) {
-      console.warn(`skip ${a.id}:`, e.message || e);
-    }
-  }
-  console.log(`Done. Inserted ${inserted} trait rows.`);
+const { SUPABASE_URL, SUPABASE_ANON_KEY } = process.env;
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  console.error('Set SUPABASE_URL and SUPABASE_ANON_KEY in your environment.');
+  process.exit(1);
 }
 
-run().catch(e => { console.error(e); process.exit(1); });
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+function ipfsToHttp(u, gw = 'https://ipfs.io/ipfs/') {
+  if (!u) return '';
+  const s = String(u);
+  if (s.startsWith('ipfs://')) return gw + s.slice('ipfs://'.length);
+  if (s.includes('gateway.pinata.cloud/ipfs/')) {
+    return s.replace('https://gateway.pinata.cloud/ipfs/', gw);
+  }
+  return s;
+}
+
+async function run() {
+  console.log('Backfilling traits…');
+  // only published so you don’t write noise
+  const { data: arts, error } = await sb
+    .from('artworks')
+    .select('id, metadata_url')
+    .eq('status', 'published');
+
+  if (error) throw error;
+  if (!arts?.length) {
+    console.log('No published artworks found. Done.');
+    return;
+  }
+
+  let ok = 0, skipped = 0, failed = 0;
+
+  for (const a of arts) {
+    try {
+      const url = ipfsToHttp(a.metadata_url);
+      if (!url) { skipped++; continue; }
+
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) { skipped++; continue; }
+
+      const j = await res.json();
+      const attrs = Array.isArray(j?.attributes) ? j.attributes : [];
+      const rows = attrs
+        .map(x => ({
+          trait_type: x?.trait_type ?? x?.traitType ?? '',
+          value: (x?.value ?? '').toString(),
+        }))
+        .filter(r => r.trait_type && r.value !== '');
+
+      if (!rows.length) { skipped++; continue; }
+
+      const payload = rows.map(r => ({
+        artwork_id: a.id,
+        trait_type: r.trait_type,
+        value: r.value,
+      }));
+
+      // composite PK (artwork_id, trait_type, value) → upsert is idempotent
+      const { error: upErr } = await sb
+        .from('artwork_attributes')
+        .upsert(payload, { onConflict: 'artwork_id,trait_type,value' });
+
+      if (upErr) throw upErr;
+
+      ok++;
+      console.log(`✓ ${a.id} — upserted ${payload.length} trait(s)`);
+    } catch (e) {
+      failed++;
+      console.warn(`× ${a.id} — ${e?.message || e}`);
+    }
+  }
+
+  console.log(`\nDone. ok=${ok} skipped=${skipped} failed=${failed}`);
+}
+
+run().catch(e => {
+  console.error(e);
+  process.exit(1);
+});
