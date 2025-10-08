@@ -12,7 +12,7 @@ type Props = {
   file: File;
   aspect: number;
   onCancel: () => void;
-  onDone: (_cropped: Blob, _meta: { width: number; height: number }) => void | Promise<void>;
+  onDone: (cropped: Blob, meta: { width: number; height: number }) => void | Promise<void>;
 };
 
 export default function CropModal({ file, aspect, onCancel, onDone }: Props) {
@@ -25,9 +25,7 @@ export default function CropModal({ file, aspect, onCancel, onDone }: Props) {
   const src = useMemo(() => URL.createObjectURL(file), [file]);
   useEffect(() => () => URL.revokeObjectURL(src), [src]);
 
-  function onComplete(_: Area, croppedAreaPixels: Area) {
-    setArea(croppedAreaPixels);
-  }
+  const onComplete = (_: Area, croppedAreaPixels: Area) => setArea(croppedAreaPixels);
 
   async function handleSave() {
     if (!area) return;
@@ -116,19 +114,16 @@ async function cropToBlob(
 ): Promise<{ blob: Blob; width: number; height: number }> {
   const img = await loadImage(imgSrc);
 
-  // create canvas of the crop size
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas not supported");
 
-  // account for rotation by drawing to a temp canvas
+  // rotation-safe temp canvas
   const safeW = Math.ceil(
-    Math.abs(img.width * Math.cos(rad(rotation))) +
-      Math.abs(img.height * Math.sin(rad(rotation)))
+    Math.abs(img.width * Math.cos(rad(rotation))) + Math.abs(img.height * Math.sin(rad(rotation)))
   );
   const safeH = Math.ceil(
-    Math.abs(img.width * Math.sin(rad(rotation))) +
-      Math.abs(img.height * Math.cos(rad(rotation)))
+    Math.abs(img.width * Math.sin(rad(rotation))) + Math.abs(img.height * Math.cos(rad(rotation)))
   );
   const tmp = document.createElement("canvas");
   tmp.width = safeW;
@@ -138,7 +133,7 @@ async function cropToBlob(
   tctx.rotate(rad(rotation));
   tctx.drawImage(img, -img.width / 2, -img.height / 2);
 
-  // crop from the rotated image
+  // crop from rotated buffer
   canvas.width = Math.round(area.width);
   canvas.height = Math.round(area.height);
   ctx.drawImage(
