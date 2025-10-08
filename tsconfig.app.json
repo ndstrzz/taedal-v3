@@ -11,5 +11,6 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "baseUrl": "."
   },
-  "include": ["src", "vite-env.d.ts"]
+  "include": ["src", "vite-env.d.ts"],
+  "exclude": ["server", "scripts", "**/*.cjs", "**/node_modules/**"]
 }

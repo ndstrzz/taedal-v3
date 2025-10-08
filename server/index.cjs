@@ -62,7 +62,6 @@ app.use(express.json());
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 // ---- Stripe/Crypto checkout routes (mounted here) ------------------------
-// NOTE: this file lives *in the same folder* as index.cjs
 const checkoutRouter = require(path.join(__dirname, 'checkout.cjs'));
 app.use('/api/checkout', checkoutRouter);
 
@@ -166,7 +165,6 @@ app.post('/api/hashes', upload.single('file'), async (req, res) => {
     const buf = req.file.buffer;
     const mime = req.file.mimetype || '';
 
-    // sha256 is always available and cheap
     const sha = sha256Hex(buf);
 
     let dhash = null;

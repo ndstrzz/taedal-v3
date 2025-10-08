@@ -6,6 +6,7 @@ import { ipfsToHttp } from "../lib/ipfs-url";
 import { DEFAULT_COVER_URL } from "../lib/config";
 import MakeOfferModal from "../components/MakeOfferModal";
 import CheckoutModal from "../components/CheckoutModal";
+import { API_BASE } from "../lib/config";
 
 type Attribute = { trait_type: string; value: string | number };
 type Metadata = {
@@ -37,8 +38,8 @@ type Artwork = {
 
 type Listing = {
   artwork_id: string;
-  listing_id?: string; // from v_active_listing
-  id?: string; // from listings table fallback
+  listing_id?: string;
+  id?: string;
   lister: string | null;
   status: "active" | "cancelled" | "filled";
   price: string | null;
@@ -105,7 +106,6 @@ export default function ArtworkDetail() {
   const [showCheckout, setShowCheckout] = useState(false);
   const [showOffer, setShowOffer] = useState(false);
 
-  // 1) Load artwork
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -124,12 +124,9 @@ export default function ArtworkDetail() {
         setLoading(false);
       }
     })();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [id]);
 
-  // 2) Load metadata JSON
   useEffect(() => {
     let aborted = false;
     (async () => {
@@ -144,12 +141,9 @@ export default function ArtworkDetail() {
         if (!aborted) setMeta(null);
       }
     })();
-    return () => {
-      aborted = true;
-    };
+    return () => { aborted = true; };
   }, [art?.metadata_url]);
 
-  // 3) Activity
   async function fetchActivity(artworkId: string) {
     const { data } = await supabase
       .from("activity")
@@ -158,11 +152,8 @@ export default function ArtworkDetail() {
       .order("created_at", { ascending: false });
     if (data) setActs(data as Act[]);
   }
-  useEffect(() => {
-    if (art?.id) fetchActivity(art.id);
-  }, [art?.id]);
+  useEffect(() => { if (art?.id) fetchActivity(art.id); }, [art?.id]);
 
-  // 4) Rarity stats
   useEffect(() => {
     (async () => {
       let { data, error } = await supabase.from("trait_stats").select("*");
@@ -174,17 +165,13 @@ export default function ArtworkDetail() {
     })();
   }, []);
 
-  // 5) Listing
   async function fetchListing(artworkId: string) {
     const viaView = await supabase
       .from("v_active_listing")
       .select("*")
       .eq("artwork_id", artworkId)
       .maybeSingle();
-    if (viaView.data) {
-      setListing(viaView.data as unknown as Listing);
-      return;
-    }
+    if (viaView.data) { setListing(viaView.data as unknown as Listing); return; }
     const fallback = await supabase
       .from("listings")
       .select("*")
@@ -196,11 +183,8 @@ export default function ArtworkDetail() {
     if (fallback.data) setListing(fallback.data as unknown as Listing);
     else setListing(null);
   }
-  useEffect(() => {
-    if (id) fetchListing(id);
-  }, [id]);
+  useEffect(() => { if (id) fetchListing(id); }, [id]);
 
-  // 5b) Best offer
   useEffect(() => {
     if (!id) return;
     (async () => {
@@ -214,13 +198,11 @@ export default function ArtworkDetail() {
     })();
   }, [id]);
 
-  // Refetch after writes
   async function refetchAll() {
     if (!id) return;
     await Promise.all([fetchListing(id), fetchActivity(id)]);
   }
 
-  // ---- Media selection (robust)
   const media = useMemo(() => {
     const poster = art?.cover_url || DEFAULT_COVER_URL;
     if (art?.media_kind === "video") {
@@ -230,12 +212,8 @@ export default function ArtworkDetail() {
         return { kind: "video" as const, poster, src: ipfsToHttp(meta.animation_url) };
       return { kind: "video" as const, poster, src: "" };
     }
-    if (art?.image_cid) {
-      return { kind: "image" as const, poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) };
-    }
-    if (meta?.image) {
-      return { kind: "image" as const, poster, src: ipfsToHttp(meta.image) };
-    }
+    if (art?.image_cid) return { kind: "image" as const, poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) };
+    if (meta?.image)  return { kind: "image" as const, poster, src: ipfsToHttp(meta.image) };
     return { kind: "image" as const, poster, src: poster };
   }, [art?.media_kind, art?.animation_cid, art?.image_cid, art?.cover_url, meta?.animation_url, meta?.image]);
 
@@ -254,32 +232,25 @@ export default function ArtworkDetail() {
   const royaltyPct = ((art.royalty_bps || 0) / 100).toFixed(2);
   const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
 
-  // Prefer listing, fallback to artwork sale_* for display + buy
   const listingId = listing?.listing_id || listing?.id || null;
   const currentPrice = listing?.price ?? art.sale_price ?? "";
   const currentCurrency = (listing?.currency || art.sale_currency || "ETH") as "ETH" | "WETH" | "USD";
-  const displayPrice = currentPrice ? `${currentPrice} ${currentCurrency}` : null;
+  const displayPrice = currentPrice ? `${currentPrice} {currentCurrency}` : null; // (kept simple)
 
-  // Can buy if we either have a listing OR a fixed-price artwork
   const canBuy =
     Boolean(listingId && currentPrice) ||
     Boolean(!listingId && art.sale_kind === "fixed" && art.sale_price);
 
-  // If no listing yet but fixed price exists, create listing then open modal
   async function handleBuyClick() {
     try {
-      if (listingId) {
-        setShowCheckout(true);
-        return;
-      }
-      // Create listing on the fly (server will insert into listings + activity)
+      if (listingId) { setShowCheckout(true); return; }
       const body = {
         artwork_id: art.id,
-        lister: art.owner, // if you want current user instead, wire in auth user id here
+        lister: art.owner,
         price: art.sale_price,
         currency: art.sale_currency || "ETH",
       };
-      const r = await fetch("/api/listings/create", {
+      const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/listings/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -291,7 +262,6 @@ export default function ArtworkDetail() {
       setShowCheckout(true);
     } catch (e) {
       console.error(e);
-      // Non-fatal – you can add a toast here if you have one wired in this file
     }
   }
 
@@ -389,7 +359,6 @@ export default function ArtworkDetail() {
                 </>
               )}
 
-              {/* Chain details */}
               <div className="mt-6">
                 <div className="mb-1 text-sm font-medium text-neutral-200">Blockchain details</div>
                 <div className="grid grid-cols-2 gap-2 text-xs text-neutral-400">
@@ -419,17 +388,10 @@ export default function ArtworkDetail() {
                 <div className="text-sm text-neutral-400">No activity yet.</div>
               ) : (
                 acts.map((a) => (
-                  <div
-                    key={a.id}
-                    className="flex items-center justify-between rounded-xl border border-neutral-800 p-3 text-sm"
-                  >
+                  <div key={a.id} className="flex items-center justify-between rounded-xl border border-neutral-800 p-3 text-sm">
                     <div className="flex items-center gap-2">
-                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize">
-                        {a.kind}
-                      </span>
-                      <span className="text-neutral-300">
-                        {a.actor ? `${a.actor.slice(0, 6)}…${a.actor.slice(-4)}` : "Someone"}
-                      </span>
+                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize">{a.kind}</span>
+                      <span className="text-neutral-300">{a.actor ? `${a.actor.slice(0, 6)}…${a.actor.slice(-4)}` : "Someone"}</span>
                     </div>
                     <div className="text-right">
                       {a.price_eth ? <div className="text-neutral-200">{a.price_eth} ETH</div> : null}
@@ -466,9 +428,7 @@ export default function ArtworkDetail() {
                       {pct !== null ? (
                         <>
                           <div className="text-xs text-neutral-400">{pct}%</div>
-                          <div className="text-[11px] text-neutral-500">
-                            {s?.count ?? 0} of {s?.total ?? 0}
-                          </div>
+                          <div className="text-[11px] text-neutral-500">{s?.count ?? 0} of {s?.total ?? 0}</div>
                         </>
                       ) : (
                         <div className="text-xs text-neutral-500">—</div>
@@ -491,7 +451,7 @@ export default function ArtworkDetail() {
           onClose={() => setShowCheckout(false)}
           onPurchased={refetchAll}
           artworkId={art.id}
-          listingId={listingId || ""} // modal/server will still work after create
+          listingId={listingId || ""}
           title={title}
           price={String(currentPrice)}
           currency={currentCurrency}

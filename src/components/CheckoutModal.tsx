@@ -3,6 +3,7 @@ import React, { useMemo, useState } from "react";
 import { loadStripe } from "@stripe/stripe-js";
 import { supabase } from "../lib/supabase";
 import { useToast } from "./Toaster";
+import { API_BASE } from "../lib/config";
 
 type Props = {
   open: boolean;
@@ -18,7 +19,6 @@ type Props = {
 
 type Method = "card" | "crypto";
 
-// Publishable key is provided at build-time (Vite env)
 const STRIPE_PK = import.meta.env.VITE_STRIPE_PUBKEY as string | undefined;
 
 export default function CheckoutModal({
@@ -49,25 +49,26 @@ export default function CheckoutModal({
         toast({
           variant: "error",
           title: "Stripe not configured",
-          description: "Set VITE_STRIPE_PUBKEY in your environment.",
+          description: "Set VITE_STRIPE_PUBKEY in your frontend env.",
         });
         return;
       }
       setBusy(true);
 
-      const r = await fetch("/api/checkout/create-stripe-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
-      });
+      const r = await fetch(
+        `${API_BASE.replace(/\/$/, "")}/api/checkout/create-stripe-session`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
+        }
+      );
       if (!r.ok) throw new Error(`Failed (${r.status})`);
       const { sessionId } = await r.json();
 
-      // Non-null assertion is safe because we guard above
-      const stripe = await loadStripe(STRIPE_PK!);
+      // Cast to any to avoid the TS collision with server "stripe" types
+      const stripe = await loadStripe(STRIPE_PK);
       if (!stripe) throw new Error("Stripe failed to load");
-
-      // Some setups have mismatched types; cast to any to avoid TS error:
       const { error } = await (stripe as any).redirectToCheckout({ sessionId });
       if (error) throw error;
     } catch (e: any) {
@@ -83,15 +84,17 @@ export default function CheckoutModal({
   async function handleCryptoCheckout() {
     try {
       setBusy(true);
-      const r = await fetch("/api/checkout/create-crypto-intent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
-      });
+      const r = await fetch(
+        `${API_BASE.replace(/\/$/, "")}/api/checkout/create-crypto-intent`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
+        }
+      );
       if (!r.ok) throw new Error(`Failed (${r.status})`);
       const { hostedUrl, chargeId } = await r.json();
 
-      // Optional: store a local "pending" order so UI can reflect the flow
       await supabase.from("orders").insert({
         artwork_id: artworkId,
         listing_id: listingId,
@@ -113,7 +116,6 @@ export default function CheckoutModal({
     }
   }
 
-  // Local-only helper to complete flow without an external PSP
   async function simulateSuccess() {
     try {
       setBusy(true);
@@ -129,11 +131,7 @@ export default function CheckoutModal({
       await onPurchased?.();
       onClose();
     } catch (e: any) {
-      toast({
-        variant: "error",
-        title: "Simulate failed",
-        description: String(e?.message || e),
-      });
+      toast({ variant: "error", title: "Simulate failed", description: String(e?.message || e) });
     } finally {
       setBusy(false);
     }
@@ -209,11 +207,7 @@ export default function CheckoutModal({
         )}
 
         <div className="flex items-center justify-end gap-2 border-t border-neutral-800 p-3">
-          <button
-            onClick={onClose}
-            className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
-            disabled={busy}
-          >
+          <button onClick={onClose} className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900" disabled={busy}>
             Cancel
           </button>
         </div>
