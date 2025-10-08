@@ -4,6 +4,8 @@ import { useParams, Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { ipfsToHttp } from "../lib/ipfs-url";
 import { DEFAULT_COVER_URL } from "../lib/config";
+import BuyNowModal from "../components/BuyNowModal";
+import MakeOfferModal from "../components/MakeOfferModal";
 
 type Attribute = { trait_type: string; value: string | number };
 type Metadata = {
@@ -35,11 +37,11 @@ type Artwork = {
 
 type Listing = {
   artwork_id: string;
-  listing_id?: string;
-  id?: string; // when falling back to listings table
+  listing_id?: string;      // from v_active_listing
+  id?: string;              // from listings table fallback
   lister: string | null;
   status: "active" | "cancelled" | "filled";
-  price: string | null;     // numeric from PG arrives as string
+  price: string | null;     // numeric arrives as string from PG
   currency: string | null;
   created_at: string;
 };
@@ -54,7 +56,7 @@ type TraitStat = {
 
 type Act = {
   id: string;
-  kind: "mint" | "list" | "sale" | "bid" | "transfer";
+  kind: "mint" | "list" | "sale" | "bid" | "transfer" | "buy" | "cancel_list";
   tx_hash: string | null;
   price_eth: string | number | null;
   actor: string | null;
@@ -89,6 +91,9 @@ export default function ArtworkDetail() {
   const [acts, setActs] = useState<Act[]>([]);
   const [traitStats, setTraitStats] = useState<TraitStat[]>([]);
   const [listing, setListing] = useState<Listing | null>(null);
+
+  const [showBuy, setShowBuy] = useState(false);
+  const [showOffer, setShowOffer] = useState(false);
 
   // 1) Load artwork
   useEffect(() => {
@@ -135,24 +140,24 @@ export default function ArtworkDetail() {
   }, [art?.metadata_url]);
 
   // 3) Activity for this artwork
+  async function fetchActivity(artworkId: string) {
+    const { data } = await supabase
+      .from("activity")
+      .select("*")
+      .eq("artwork_id", artworkId)
+      .order("created_at", { ascending: false });
+    if (data) setActs(data as Act[]);
+  }
+
   useEffect(() => {
-    if (!art?.id) return;
-    (async () => {
-      const { data } = await supabase
-        .from("activity")
-        .select("*")
-        .eq("artwork_id", art.id)
-        .order("created_at", { ascending: false });
-      if (data) setActs(data as Act[]);
-    })();
+    if (art?.id) fetchActivity(art.id);
   }, [art?.id]);
 
   // 4) Rarity stats — prefer view "trait_stats", fall back to MV "trait_stats_mv"
   useEffect(() => {
     (async () => {
-      // try the view first
       let { data, error } = await supabase.from("trait_stats").select("*");
-      if (error && String(error.message || "").includes("relation") && String(error.message).includes("does not exist")) {
+      if (error) {
         // fall back to MV name if the view isn't present
         const alt = await supabase.from("trait_stats_mv").select("*");
         data = alt.data || null;
@@ -162,31 +167,39 @@ export default function ArtworkDetail() {
   }, []);
 
   // 5) Active listing — prefer helper view, fall back to listings table
+  async function fetchListing(artworkId: string) {
+    // try the optional helper view first
+    const viaView = await supabase
+      .from("v_active_listing")
+      .select("*")
+      .eq("artwork_id", artworkId)
+      .maybeSingle();
+    if (viaView.data) {
+      setListing(viaView.data as unknown as Listing);
+      return;
+    }
+    // fallback to base table
+    const fallback = await supabase
+      .from("listings")
+      .select("*")
+      .eq("artwork_id", artworkId)
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (fallback.data) setListing(fallback.data as unknown as Listing);
+    else setListing(null);
+  }
+
   useEffect(() => {
-    if (!id) return;
-    (async () => {
-      // try the optional helper view first
-      const viaView = await supabase
-        .from("v_active_listing")
-        .select("*")
-        .eq("artwork_id", id)
-        .maybeSingle();
-      if (viaView.data) {
-        setListing(viaView.data as unknown as Listing);
-        return;
-      }
-      // if the view doesn't exist or is empty, fall back to public.listings
-      const fallback = await supabase
-        .from("listings")
-        .select("*")
-        .eq("artwork_id", id)
-        .eq("status", "active")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (fallback.data) setListing(fallback.data as unknown as Listing);
-    })();
+    if (id) fetchListing(id);
   }, [id]);
+
+  // Refetch everything after a write (buy/offer)
+  async function refetchAll() {
+    if (!id) return;
+    await Promise.all([fetchListing(id), fetchActivity(id)]);
+  }
 
   // 6) Media + rarity map
   const media = useMemo(() => {
@@ -233,6 +246,8 @@ export default function ArtworkDetail() {
 
   const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
 
+  const listingId = listing?.listing_id || listing?.id || null;
+
   return (
     <div className="mx-auto max-w-6xl p-6">
       <div className="grid gap-6 md:grid-cols-2">
@@ -275,11 +290,15 @@ export default function ArtworkDetail() {
             <div className="mt-3 flex gap-2">
               <button
                 className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
-                disabled={!displayPrice}
+                disabled={!displayPrice || !listingId}
+                onClick={() => setShowBuy(true)}
               >
                 Buy now
               </button>
-              <button className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900">
+              <button
+                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
+                onClick={() => setShowOffer(true)}
+              >
                 Make offer
               </button>
             </div>
@@ -406,6 +425,25 @@ export default function ArtworkDetail() {
           <div className="text-sm text-neutral-400">No traits.</div>
         )}
       </div>
+
+      {/* Modals */}
+      {showBuy && listing && listingId && (
+        <BuyNowModal
+          artworkId={art.id}
+          listingId={listingId}
+          defaultPrice={String(listing.price ?? "")}
+          defaultCurrency={listing.currency || "ETH"}
+          onClose={() => setShowBuy(false)}
+          onDone={refetchAll}
+        />
+      )}
+      {showOffer && (
+        <MakeOfferModal
+          artworkId={art.id}
+          onClose={() => setShowOffer(false)}
+          onDone={refetchAll}
+        />
+      )}
     </div>
   );
 }
