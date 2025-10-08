@@ -6,7 +6,7 @@ import CreateArtwork from "./pages/CreateArtwork";
 import SettingsProfile from "./pages/SettingsProfile";
 import PublicProfile from "./routes/PublicProfile";
 import MyProfile from "./pages/MyProfile";
-import ArtworkDetail from "./pages/ArtworkDetail"; // ⬅️ add
+import ArtworkDetail from "./pages/ArtworkDetail";
 import NavBar from "./components/NavBar";
 import { useAuth } from "./state/AuthContext";
 
@@ -42,8 +42,6 @@ export default function App() {
       <NavBar />
       <Routes>
         <Route path="/" element={<Home />} />
-
-        {/* Auth */}
         <Route
           path="/login"
           element={
@@ -60,8 +58,6 @@ export default function App() {
             </RedirectIfAuthed>
           }
         />
-
-        {/* Create (only if signed in) */}
         <Route
           path="/create"
           element={
@@ -70,8 +66,6 @@ export default function App() {
             </ProtectedRoute>
           }
         />
-
-        {/* Settings */}
         <Route
           path="/settings"
           element={
@@ -80,8 +74,6 @@ export default function App() {
             </ProtectedRoute>
           }
         />
-
-        {/* Your own profile */}
         <Route
           path="/me"
           element={
@@ -90,14 +82,9 @@ export default function App() {
             </ProtectedRoute>
           }
         />
-
-        {/* Artwork detail */}
-        <Route path="/a/:id" element={<ArtworkDetail />} />  {/* ⬅️ FIX for your “Not found” */}
-
-        {/* Public profile routes */}
+        <Route path="/a/:id" element={<ArtworkDetail />} />
         <Route path="/@:handle" element={<PublicProfile />} />
         <Route path="/u/:username" element={<PublicProfile />} />
-
         <Route path="*" element={<NotFound />} />
       </Routes>
     </>
