@@ -1,17 +1,54 @@
 #!/usr/bin/env node
+/**
+ * Backfill traits from token metadata into public.artwork_attributes.
+ * - Loads env from ./server/.env automatically (Windows-friendly).
+ * - Prefers SERVICE ROLE key, falls back to anon.
+ * - Uses global fetch (Node 18+) and only falls back to node-fetch if missing.
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
-// Node 18+ has global fetch. If you’re on Node <18, uncomment next line:
-// import fetch from "node-fetch";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const { SUPABASE_URL, SUPABASE_ANON_KEY } = process.env;
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.error("Set SUPABASE_URL and SUPABASE_ANON_KEY in env");
+// Load env: root .env then server/.env
+dotenv.config();
+const serverEnvPath = path.resolve(__dirname, "../server/.env");
+if (
+  (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) &&
+  fs.existsSync(serverEnvPath)
+) {
+  dotenv.config({ path: serverEnvPath });
+}
+
+// Fetch impl (global in Node >=18)
+let fetchFn = globalThis.fetch;
+if (!fetchFn) {
+  // Lazy fallback if someone runs this on very old Node
+  const mod = await import("node-fetch");
+  fetchFn = mod.default;
+}
+
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+
+if (!SUPABASE_URL || (!SUPABASE_SERVICE_ROLE_KEY && !SUPABASE_ANON_KEY)) {
+  console.error(
+    "✘ Set SUPABASE_URL and SUPABASE_ANON_KEY (or SUPABASE_SERVICE_ROLE_KEY) in your env"
+  );
   process.exit(1);
 }
 
-const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const sb = createClient(
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY
+);
 
+// IPFS -> HTTP
 const ipfsToHttp = (u, gw = "https://ipfs.io/ipfs/") => {
   if (!u) return "";
   u = String(u);
@@ -23,24 +60,38 @@ const ipfsToHttp = (u, gw = "https://ipfs.io/ipfs/") => {
 };
 
 async function run() {
+  console.log(
+    "→ Backfill traits: using",
+    SUPABASE_SERVICE_ROLE_KEY ? "SERVICE_ROLE" : "ANON",
+    "key"
+  );
+
+  let insertedTotal = 0,
+    skipped = 0,
+    errored = 0;
+
   const { data: arts, error } = await sb
     .from("artworks")
     .select("id, metadata_url, status")
-    .eq("status", "published");
+    .in("status", ["published", "draft"]);
   if (error) throw error;
 
   for (const a of arts || []) {
-    const url = ipfsToHttp(a.metadata_url);
-    if (!url) continue;
-
     try {
-      const res = await fetch(url);
-      if (!res.ok) {
-        console.warn("Skip", a.id, "metadata http", res.status);
+      const url = ipfsToHttp(a.metadata_url);
+      if (!url) {
+        skipped++;
         continue;
       }
+
+      const res = await fetchFn(url);
+      if (!res.ok) {
+        skipped++;
+        continue;
+      }
+
       const j = await res.json();
-      const attrs = Array.isArray(j?.attributes) ? j.attributes : [];
+      const attrs = Array.isArray(j.attributes) ? j.attributes : [];
       const rows = attrs
         .map((x) => ({
           trait_type: x.trait_type || x.traitType,
@@ -48,11 +99,8 @@ async function run() {
         }))
         .filter((r) => r.trait_type && String(r.value ?? "") !== "");
 
-      // clear then insert (avoids dupes if you re-run)
-      await sb.from("artwork_attributes").delete().eq("artwork_id", a.id);
-
       if (!rows.length) {
-        console.log("No traits for", a.id);
+        skipped++;
         continue;
       }
 
@@ -62,14 +110,25 @@ async function run() {
         value: String(r.value),
       }));
 
-      const { error: upErr } = await sb.from("artwork_attributes").insert(payload);
+      const { error: upErr } = await sb
+        .from("artwork_attributes")
+        .upsert(payload, {
+          onConflict: "artwork_id,trait_type,value",
+          ignoreDuplicates: false,
+        });
       if (upErr) throw upErr;
 
-      console.log("Backfilled", a.id, rows.length, "traits");
+      insertedTotal += payload.length;
+      console.log("✓ Backfilled", a.id, payload.length, "traits");
     } catch (e) {
-      console.warn("Skip", a.id, e?.message || e);
+      errored++;
+      console.warn("! Skip", a.id, e.message || e);
     }
   }
+
+  console.log(
+    `Done. Inserted: ${insertedTotal}, skipped: ${skipped}, errored: ${errored}`
+  );
 }
 
 run().catch((e) => {

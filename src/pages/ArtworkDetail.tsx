@@ -1,7 +1,6 @@
 // src/pages/ArtworkDetail.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { Helmet } from "react-helmet";
 import { supabase } from "../lib/supabase";
 import { ipfsToHttp } from "../lib/ipfs-url";
 import { DEFAULT_COVER_URL } from "../lib/config";
@@ -28,19 +27,19 @@ type Artwork = {
   tx_hash: string | null;
   media_kind: "image" | "video" | null;
   royalty_bps: number | null;
-  // legacy sale fields—kept as fallback if you haven’t created listings yet
   sale_kind: "fixed" | "auction" | null;
   sale_price: string | null;
   sale_currency: "ETH" | "WETH" | null;
   created_at: string;
 };
 
-type ActiveListing = {
+type Listing = {
   artwork_id: string;
-  listing_id: string;
+  listing_id?: string;
+  id?: string; // when falling back to listings table
   lister: string | null;
   status: "active" | "cancelled" | "filled";
-  price: string | null;
+  price: string | null;     // numeric from PG arrives as string
   currency: string | null;
   created_at: string;
 };
@@ -55,7 +54,7 @@ type TraitStat = {
 
 type Act = {
   id: string;
-  kind: "mint" | "list" | "buy" | "transfer" | "cancel_list" | "update_list";
+  kind: "mint" | "list" | "sale" | "bid" | "transfer";
   tx_hash: string | null;
   price_eth: string | number | null;
   actor: string | null;
@@ -86,13 +85,10 @@ export default function ArtworkDetail() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  // Listings + tabs
-  const [activeListing, setActiveListing] = useState<ActiveListing | null>(null);
   const [tab, setTab] = useState<"details" | "activity">("details");
-
-  // Activity + rarity
   const [acts, setActs] = useState<Act[]>([]);
   const [traitStats, setTraitStats] = useState<TraitStat[]>([]);
+  const [listing, setListing] = useState<Listing | null>(null);
 
   // 1) Load artwork
   useEffect(() => {
@@ -125,13 +121,11 @@ export default function ArtworkDetail() {
       if (!art?.metadata_url) return setMeta(null);
       try {
         const url = ipfsToHttp(art.metadata_url);
-        if (!url) return setMeta(null);
         const r = await fetch(url, { cache: "no-store" });
         if (!r.ok) throw new Error(`Metadata HTTP ${r.status}`);
         const j = (await r.json()) as Metadata;
         if (!aborted) setMeta(j || null);
-      } catch (e) {
-        console.warn("[metadata] fetch failed:", e);
+      } catch {
         if (!aborted) setMeta(null);
       }
     })();
@@ -140,44 +134,61 @@ export default function ArtworkDetail() {
     };
   }, [art?.metadata_url]);
 
-  // 3) Load active listing (if you created the view)
-  useEffect(() => {
-    (async () => {
-      if (!art?.id) return setActiveListing(null);
-      const { data } = await supabase
-        .from("v_active_listing")
-        .select("*")
-        .eq("artwork_id", art.id)
-        .limit(1)
-        .maybeSingle();
-      setActiveListing((data as ActiveListing) || null);
-    })();
-  }, [art?.id]);
-
-  // 4) Activity for this artwork
+  // 3) Activity for this artwork
   useEffect(() => {
     if (!art?.id) return;
     (async () => {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from("activity")
         .select("*")
         .eq("artwork_id", art.id)
         .order("created_at", { ascending: false });
-      if (!error && data) setActs(data as Act[]);
+      if (data) setActs(data as Act[]);
     })();
   }, [art?.id]);
 
-  // 5) Rarity stats (materialized view or simple view)
+  // 4) Rarity stats — prefer view "trait_stats", fall back to MV "trait_stats_mv"
   useEffect(() => {
     (async () => {
-      const { data } =
-        (await supabase.from("trait_stats_mv").select("*")) ||
-        (await supabase.from("trait_stats").select("*"));
+      // try the view first
+      let { data, error } = await supabase.from("trait_stats").select("*");
+      if (error && String(error.message || "").includes("relation") && String(error.message).includes("does not exist")) {
+        // fall back to MV name if the view isn't present
+        const alt = await supabase.from("trait_stats_mv").select("*");
+        data = alt.data || null;
+      }
       if (data) setTraitStats(data as TraitStat[]);
     })();
   }, []);
 
-  // 6) Compute media + rarity map BEFORE any early returns
+  // 5) Active listing — prefer helper view, fall back to listings table
+  useEffect(() => {
+    if (!id) return;
+    (async () => {
+      // try the optional helper view first
+      const viaView = await supabase
+        .from("v_active_listing")
+        .select("*")
+        .eq("artwork_id", id)
+        .maybeSingle();
+      if (viaView.data) {
+        setListing(viaView.data as unknown as Listing);
+        return;
+      }
+      // if the view doesn't exist or is empty, fall back to public.listings
+      const fallback = await supabase
+        .from("listings")
+        .select("*")
+        .eq("artwork_id", id)
+        .eq("status", "active")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (fallback.data) setListing(fallback.data as unknown as Listing);
+    })();
+  }, [id]);
+
+  // 6) Media + rarity map
   const media = useMemo(() => {
     if (!art) return { kind: "image" as const, poster: DEFAULT_COVER_URL, src: "" };
     const poster = art.cover_url || DEFAULT_COVER_URL;
@@ -191,9 +202,9 @@ export default function ArtworkDetail() {
 
     const metaAnim = meta?.animation_url ? ipfsToHttp(meta.animation_url) : "";
     const metaImg = meta?.image ? ipfsToHttp(meta.image) : "";
+
     if (metaAnim) return { kind: "video" as const, poster, src: metaAnim };
     if (metaImg) return { kind: "image" as const, poster, src: metaImg };
-
     return { kind: "image" as const, poster, src: poster };
   }, [art, meta]);
 
@@ -203,45 +214,27 @@ export default function ArtworkDetail() {
     return m;
   }, [traitStats]);
 
-  // Early returns AFTER all hooks
+  // Early returns
   if (loading) return <Skeleton />;
   if (err) return <div className="p-6 text-red-400">Error: {err}</div>;
   if (!art) return <div className="p-6 text-neutral-400">Artwork not found.</div>;
 
-  // Title/desc & price
   const title = art.title || meta?.name || "Untitled";
   const desc = art.description || meta?.description || "";
   const royaltyPct = ((art.royalty_bps || 0) / 100).toFixed(2);
-  const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
 
-  // Prefer active listing if available; fallback to legacy sale fields
-  const priceFromListing =
-    activeListing?.status === "active" && activeListing?.price
-      ? `${activeListing.price} ${activeListing.currency || "ETH"}`
-      : null;
-
-  const legacyPrice =
-    art.sale_kind === "fixed" && art.sale_price
+  // Prefer off-chain active listing price if present, else on-chain-ish sale_* fields
+  const displayPrice =
+    listing?.price
+      ? `${listing.price} ${listing.currency || "ETH"}`
+      : art.sale_kind === "fixed" && art.sale_price
       ? `${art.sale_price} ${art.sale_currency || "ETH"}`
       : null;
 
-  const showPrice = priceFromListing || legacyPrice;
-
-  // OG/SEO image: prefer media.src if image; else poster; else default
-  const ogImage = media.kind === "image" ? (media.src || media.poster) : media.poster;
+  const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
 
   return (
     <div className="mx-auto max-w-6xl p-6">
-      <Helmet>
-        <title>{title} • taedal</title>
-        {desc ? <meta name="description" content={desc.slice(0, 160)} /> : null}
-        <meta property="og:title" content={title} />
-        {desc ? <meta property="og:description" content={desc.slice(0, 200)} /> : null}
-        {ogImage ? <meta property="og:image" content={ogImage} /> : null}
-        <meta property="og:type" content="website" />
-        {ogImage ? <meta name="twitter:card" content="summary_large_image" /> : null}
-      </Helmet>
-
       <div className="grid gap-6 md:grid-cols-2">
         {/* Media */}
         <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950">
@@ -278,18 +271,11 @@ export default function ArtworkDetail() {
 
           <div className="mt-4 rounded-2xl border border-neutral-800 p-4">
             <div className="text-sm text-neutral-400">Price</div>
-            <div className="mt-1 text-2xl font-semibold">{showPrice ?? "—"}</div>
-
-            {activeListing?.lister ? (
-              <div className="mt-1 text-xs text-neutral-500">
-                Listed by {activeListing.lister.slice(0, 6)}…{activeListing.lister.slice(-4)}
-              </div>
-            ) : null}
-
+            <div className="mt-1 text-2xl font-semibold">{displayPrice ?? "—"}</div>
             <div className="mt-3 flex gap-2">
               <button
                 className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
-                disabled={!showPrice}
+                disabled={!displayPrice}
               >
                 Buy now
               </button>
@@ -297,7 +283,6 @@ export default function ArtworkDetail() {
                 Make offer
               </button>
             </div>
-
             <div className="mt-3 text-xs text-neutral-500">
               Royalty: {royaltyPct}% • Token ID: {art.token_id ?? "—"}
             </div>
@@ -397,9 +382,7 @@ export default function ArtworkDetail() {
                 <li key={i} className="rounded-xl border border-neutral-800 p-3">
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="text-xs uppercase tracking-wide text-neutral-500">
-                        {t.trait_type}
-                      </div>
+                      <div className="text-xs uppercase tracking-wide text-neutral-500">{t.trait_type}</div>
                       <div className="text-sm text-neutral-200">{String(t.value)}</div>
                     </div>
                     <div className="text-right">
