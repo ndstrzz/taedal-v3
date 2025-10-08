@@ -12,7 +12,7 @@ type Props = {
   file: File;
   aspect: number;
   onCancel: () => void;
-  onDone: (cropped: Blob, meta: { width: number; height: number }) => void | Promise<void>;
+  onDone: (_cropped: Blob, _meta: { width: number; height: number }) => void | Promise<void>;
 };
 
 export default function CropModal({ file, aspect, onCancel, onDone }: Props) {
@@ -109,7 +109,11 @@ export default function CropModal({ file, aspect, onCancel, onDone }: Props) {
 }
 
 /** Helper: draw cropped region to a canvas and return a webp Blob + dimensions */
-async function cropToBlob(imgSrc: string, area: Area, rotation = 0): Promise<{ blob: Blob; width: number; height: number }> {
+async function cropToBlob(
+  imgSrc: string,
+  area: Area,
+  rotation = 0
+): Promise<{ blob: Blob; width: number; height: number }> {
   const img = await loadImage(imgSrc);
 
   // create canvas of the crop size
@@ -118,8 +122,14 @@ async function cropToBlob(imgSrc: string, area: Area, rotation = 0): Promise<{ b
   if (!ctx) throw new Error("Canvas not supported");
 
   // account for rotation by drawing to a temp canvas
-  const safeW = Math.ceil(Math.abs(img.width * Math.cos(rad(rotation))) + Math.abs(img.height * Math.sin(rad(rotation))));
-  const safeH = Math.ceil(Math.abs(img.width * Math.sin(rad(rotation))) + Math.abs(img.height * Math.cos(rad(rotation))));
+  const safeW = Math.ceil(
+    Math.abs(img.width * Math.cos(rad(rotation))) +
+      Math.abs(img.height * Math.sin(rad(rotation)))
+  );
+  const safeH = Math.ceil(
+    Math.abs(img.width * Math.sin(rad(rotation))) +
+      Math.abs(img.height * Math.cos(rad(rotation)))
+  );
   const tmp = document.createElement("canvas");
   tmp.width = safeW;
   tmp.height = safeH;

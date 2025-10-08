@@ -25,7 +25,9 @@ export default function LikeButton({
         .eq("artwork_id", artworkId);
       if (!cancel) setLiked((count ?? 0) > 0);
     })();
-    return () => { cancel = true; };
+    return () => {
+      cancel = true;
+    };
   }, [user, artworkId]);
 
   async function toggle() {
@@ -47,7 +49,7 @@ export default function LikeButton({
           .insert({ profile_id: user.id, artwork_id: artworkId });
         if (error) throw error;
       }
-    } catch (e) {
+    } catch {
       setLiked(was);
     } finally {
       setBusy(false);

@@ -7,7 +7,7 @@ export type Attribute = {
 
 type Props = {
   value: Attribute[];
-  onChange: (next: Attribute[]) => void;
+  onChange: (_next: Attribute[]) => void;
 };
 
 export default function AttributeEditor({ value, onChange }: Props) {

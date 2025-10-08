@@ -2,7 +2,9 @@ import { API_BASE } from "./config";
 
 export type PinResult = { cid: string; ipfsUri: string; gatewayUrl: string };
 
-function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 async function warmUpApi() {
   if (!API_BASE) throw new Error("API_BASE missing");
@@ -44,7 +46,11 @@ function xhrPin(
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve(JSON.parse(xhr.responseText));
         } else {
-          reject(new Error(`HTTP ${xhr.status} ${xhr.statusText} – ${xhr.responseText || ""}`));
+          reject(
+            new Error(
+              `HTTP ${xhr.status} ${xhr.statusText} – ${xhr.responseText || ""}`
+            )
+          );
         }
       } catch (e) {
         reject(e);
@@ -67,7 +73,9 @@ export async function pinFileViaServerWithProgress(
   const url = `${API_BASE.replace(/\/$/, "")}/api/pinata/pin-file`;
 
   // Warm the API first
-  try { await warmUpApi(); } catch {}
+  try {
+    await warmUpApi();
+  } catch {}
 
   // Show a tiny initial tick so the UI feels alive
   onProgress?.(0.05);

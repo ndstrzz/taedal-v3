@@ -1,8 +1,4 @@
-import {
-  BrowserProvider,
-  Contract,
-  JsonRpcSigner,
-} from "ethers";
+import { BrowserProvider, Contract, JsonRpcSigner } from "ethers";
 import { CHAIN_ID, NFT_ADDRESS } from "./config";
 
 export class WalletError extends Error {
@@ -13,6 +9,7 @@ export class WalletError extends Error {
   }
 }
 
+// eslint-disable-next-line no-unused-vars
 declare global {
   interface Window {
     ethereum?: any;
@@ -26,7 +23,9 @@ export async function getMetaMaskProvider(): Promise<BrowserProvider> {
   return new BrowserProvider(window.ethereum);
 }
 
-export async function ensureConnectedOnChain(provider: BrowserProvider): Promise<{
+export async function ensureConnectedOnChain(
+  provider: BrowserProvider
+): Promise<{
   signer: JsonRpcSigner;
   address: string;
 }> {
@@ -76,17 +75,21 @@ export async function mintWithMetaMask(
   const provider = await getMetaMaskProvider();
   const { signer, address } = await ensureConnectedOnChain(provider);
 
-  const c = new Contract(NFT_ADDRESS, [
-    // Taedal preferred
-    "event ArtworkLinked(address indexed minter,uint256 indexed artworkId,uint256 indexed tokenId,string tokenURI)",
-    "function mintWithURI(string uri,uint256 artworkId) returns (uint256)",
-    // Common fallbacks
-    "function safeMint(address to,string uri) returns (uint256)",
-    "function mint(address to,string uri) returns (uint256)",
-    "function mint(string uri) returns (uint256)",
-    "function safeMint(string uri) returns (uint256)",
-    "event Transfer(address indexed from,address indexed to,uint256 indexed tokenId)",
-  ], signer);
+  const c = new Contract(
+    NFT_ADDRESS,
+    [
+      // Taedal preferred
+      "event ArtworkLinked(address indexed minter,uint256 indexed artworkId,uint256 indexed tokenId,string tokenURI)",
+      "function mintWithURI(string uri,uint256 artworkId) returns (uint256)",
+      // Common fallbacks
+      "function safeMint(address to,string uri) returns (uint256)",
+      "function mint(address to,string uri) returns (uint256)",
+      "function mint(string uri) returns (uint256)",
+      "function safeMint(string uri) returns (uint256)",
+      "event Transfer(address indexed from,address indexed to,uint256 indexed tokenId)",
+    ],
+    signer
+  );
 
   // Decide which function we can call
   let callKind:

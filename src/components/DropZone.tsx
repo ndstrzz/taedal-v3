@@ -1,7 +1,7 @@
 import React, { useCallback, useRef, useState } from "react";
 
 type Props = {
-  onSelect: (file: File) => void;
+  onSelect: (f: File) => void;
   accept?: string;
   disabled?: boolean;
   className?: string;

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { uploadPublicBlob } from "../lib/storage";
 
@@ -14,7 +14,7 @@ type Props = {
   open: boolean;
   onClose: () => void;
   profile: Profile;
-  onSaved: (patch: Partial<Profile>) => void;
+  onSaved: (p: Partial<Profile>) => void;
 };
 
 function validateUsername(u: string) {

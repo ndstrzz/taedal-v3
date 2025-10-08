@@ -7,7 +7,7 @@ type Props = {
   /** User id you want to follow/unfollow */
   targetId: string;
   /** Optional: called after a successful toggle */
-  onToggled?: (isFollowing: boolean) => void;
+  onToggled?: (follows: boolean) => void;
   /** Optional: extra classes */
   className?: string;
   /** If true, render compact */

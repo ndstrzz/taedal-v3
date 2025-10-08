@@ -1,9 +1,18 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { useAuth } from "../state/AuthContext";
+
+/** inline: get viewer’s block list */
+async function fetchBlockedIds(viewerId?: string | null): Promise<Set<string>> {
+  if (!viewerId) return new Set();
+  const { data } = await supabase.from("blocks").select("blocked").eq("blocker", viewerId);
+  return new Set((data || []).map((r: any) => r.blocked as string));
+}
 
 type Art = {
   id: string;
+  owner: string;
   title: string | null;
   cover_url: string | null;
   image_cid: string | null;
@@ -11,8 +20,7 @@ type Art = {
 
 type Row = {
   created_at: string;
-  // Supabase can return object or array depending on FK metadata
-  artworks: Art | Art[] | null;
+  artworks: Art | Art[] | null; // Supabase can return object or array depending on FK metadata
 };
 
 const PAGE = 12;
@@ -20,14 +28,29 @@ const ipfs = (cid?: string | null) => (cid ? `https://ipfs.io/ipfs/${cid}` : "")
 const pickFirst = (a: Row["artworks"]): Art | null => (Array.isArray(a) ? a[0] ?? null : a);
 
 export default function LikesGrid({ profileId }: { profileId: string }) {
+  const { user } = useAuth();
+  const viewerId = user?.id || null;
+
   const [rows, setRows] = useState<Row[]>([]);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [busy, setBusy] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [blocked, setBlocked] = useState<Set<string>>(new Set());
 
   // guard against double-loads while a reset is in flight
   const resettingRef = useRef(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const b = await fetchBlockedIds(viewerId);
+      if (alive) setBlocked(b);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [viewerId]);
 
   async function loadMore() {
     if (busy || !hasMore) return;
@@ -38,7 +61,7 @@ export default function LikesGrid({ profileId }: { profileId: string }) {
     const { data, count, error } = await supabase
       .from("likes")
       .select(
-        "created_at, artworks:artwork_id ( id, title, cover_url, image_cid )",
+        "created_at, artworks:artwork_id ( id, owner, title, cover_url, image_cid )",
         { count: "exact" }
       )
       .eq("profile_id", profileId)
@@ -51,9 +74,10 @@ export default function LikesGrid({ profileId }: { profileId: string }) {
       return;
     }
 
-    const normalized: Row[] = (data as any[] | null || [])
-      .map((r) => ({ ...r, artworks: pickFirst((r as Row).artworks) }))
-      .filter((r) => r.artworks) as Row[];
+    const normalized: Row[] =
+      ((data as any[] | null) || [])
+        .map((r) => ({ ...r, artworks: pickFirst((r as Row).artworks) }))
+        .filter((r) => r.artworks && !blocked.has((r.artworks as Art).owner)) as Row[];
 
     setRows((prev) => [...prev, ...normalized]);
     setPage((p) => p + 1);
@@ -79,42 +103,30 @@ export default function LikesGrid({ profileId }: { profileId: string }) {
   useEffect(() => {
     resetAndReload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profileId]);
+  }, [profileId, blocked.size]);
 
-  // ---------------- Realtime subscription ----------------
+  // Realtime subscription (optional; keeps counts fresh)
   useEffect(() => {
-    // channel name scoped to profileId
     const channel = supabase
       .channel(`likes-live-${profileId}`)
       .on(
         "postgres_changes",
-        {
-          event: "*", // "INSERT" | "DELETE" | "UPDATE"
-          schema: "public",
-          table: "likes",
-          filter: `profile_id=eq.${profileId}`,
-        },
-        async (payload) => {
-          // For INSERT/DELETE/UPDATE, we simply reset and fetch first page to keep counts and order correct.
-          // (Keeps code simple; you can optimize later with local diffing.)
+        { event: "*", schema: "public", table: "likes", filter: `profile_id=eq.${profileId}` },
+        async () => {
           await resetAndReload();
         }
       )
       .subscribe();
-
     return () => {
       channel.unsubscribe();
     };
   }, [profileId]);
-  // -------------------------------------------------------
 
   const showEmpty = rows.length === 0 && !hasMore && !initialLoading;
 
   return (
     <>
-      {/* Grid */}
       <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-        {/* Initial skeletons */}
         {initialLoading &&
           Array.from({ length: 8 }).map((_, i) => (
             <li key={`sk-${i}`}>
@@ -125,7 +137,6 @@ export default function LikesGrid({ profileId }: { profileId: string }) {
             </li>
           ))}
 
-        {/* Real rows */}
         {rows.map((r) => {
           const a = pickFirst(r.artworks)!;
           const img = a.cover_url || ipfs(a.image_cid);
@@ -155,7 +166,6 @@ export default function LikesGrid({ profileId }: { profileId: string }) {
         })}
       </ul>
 
-      {/* Load more / loading skeleton row */}
       <div className="mt-6">
         {busy && !initialLoading && (
           <div className="mx-auto h-8 w-32 animate-pulse rounded bg-neutral-800" />
