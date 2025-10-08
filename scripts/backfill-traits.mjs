@@ -1,87 +1,78 @@
 #!/usr/bin/env node
-// scripts/backfill-traits.mjs
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from "@supabase/supabase-js";
 
-// Node 18+ has global fetch; no need for node-fetch
+// Node 18+ has global fetch. If you’re on Node <18, uncomment next line:
+// import fetch from "node-fetch";
 
 const { SUPABASE_URL, SUPABASE_ANON_KEY } = process.env;
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.error('Set SUPABASE_URL and SUPABASE_ANON_KEY in your environment.');
+  console.error("Set SUPABASE_URL and SUPABASE_ANON_KEY in env");
   process.exit(1);
 }
 
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-function ipfsToHttp(u, gw = 'https://ipfs.io/ipfs/') {
-  if (!u) return '';
-  const s = String(u);
-  if (s.startsWith('ipfs://')) return gw + s.slice('ipfs://'.length);
-  if (s.includes('gateway.pinata.cloud/ipfs/')) {
-    return s.replace('https://gateway.pinata.cloud/ipfs/', gw);
+const ipfsToHttp = (u, gw = "https://ipfs.io/ipfs/") => {
+  if (!u) return "";
+  u = String(u);
+  if (u.startsWith("ipfs://")) return gw + u.replace("ipfs://", "");
+  if (u.includes("gateway.pinata.cloud/ipfs/")) {
+    return u.replace("https://gateway.pinata.cloud/ipfs/", gw);
   }
-  return s;
-}
+  return u;
+};
 
 async function run() {
-  console.log('Backfilling traits…');
-  // only published so you don’t write noise
   const { data: arts, error } = await sb
-    .from('artworks')
-    .select('id, metadata_url')
-    .eq('status', 'published');
-
+    .from("artworks")
+    .select("id, metadata_url, status")
+    .eq("status", "published");
   if (error) throw error;
-  if (!arts?.length) {
-    console.log('No published artworks found. Done.');
-    return;
-  }
 
-  let ok = 0, skipped = 0, failed = 0;
+  for (const a of arts || []) {
+    const url = ipfsToHttp(a.metadata_url);
+    if (!url) continue;
 
-  for (const a of arts) {
     try {
-      const url = ipfsToHttp(a.metadata_url);
-      if (!url) { skipped++; continue; }
-
-      const res = await fetch(url, { cache: 'no-store' });
-      if (!res.ok) { skipped++; continue; }
-
+      const res = await fetch(url);
+      if (!res.ok) {
+        console.warn("Skip", a.id, "metadata http", res.status);
+        continue;
+      }
       const j = await res.json();
       const attrs = Array.isArray(j?.attributes) ? j.attributes : [];
       const rows = attrs
-        .map(x => ({
-          trait_type: x?.trait_type ?? x?.traitType ?? '',
-          value: (x?.value ?? '').toString(),
+        .map((x) => ({
+          trait_type: x.trait_type || x.traitType,
+          value: x.value,
         }))
-        .filter(r => r.trait_type && r.value !== '');
+        .filter((r) => r.trait_type && String(r.value ?? "") !== "");
 
-      if (!rows.length) { skipped++; continue; }
+      // clear then insert (avoids dupes if you re-run)
+      await sb.from("artwork_attributes").delete().eq("artwork_id", a.id);
 
-      const payload = rows.map(r => ({
+      if (!rows.length) {
+        console.log("No traits for", a.id);
+        continue;
+      }
+
+      const payload = rows.map((r) => ({
         artwork_id: a.id,
-        trait_type: r.trait_type,
-        value: r.value,
+        trait_type: String(r.trait_type),
+        value: String(r.value),
       }));
 
-      // composite PK (artwork_id, trait_type, value) → upsert is idempotent
-      const { error: upErr } = await sb
-        .from('artwork_attributes')
-        .upsert(payload, { onConflict: 'artwork_id,trait_type,value' });
-
+      const { error: upErr } = await sb.from("artwork_attributes").insert(payload);
       if (upErr) throw upErr;
 
-      ok++;
-      console.log(`✓ ${a.id} — upserted ${payload.length} trait(s)`);
+      console.log("Backfilled", a.id, rows.length, "traits");
     } catch (e) {
-      failed++;
-      console.warn(`× ${a.id} — ${e?.message || e}`);
+      console.warn("Skip", a.id, e?.message || e);
     }
   }
-
-  console.log(`\nDone. ok=${ok} skipped=${skipped} failed=${failed}`);
 }
 
-run().catch(e => {
+run().catch((e) => {
   console.error(e);
   process.exit(1);
 });

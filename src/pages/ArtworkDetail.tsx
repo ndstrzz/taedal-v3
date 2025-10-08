@@ -1,6 +1,7 @@
 // src/pages/ArtworkDetail.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
+import { Helmet } from "react-helmet";
 import { supabase } from "../lib/supabase";
 import { ipfsToHttp } from "../lib/ipfs-url";
 import { DEFAULT_COVER_URL } from "../lib/config";
@@ -27,9 +28,20 @@ type Artwork = {
   tx_hash: string | null;
   media_kind: "image" | "video" | null;
   royalty_bps: number | null;
+  // legacy sale fields—kept as fallback if you haven’t created listings yet
   sale_kind: "fixed" | "auction" | null;
   sale_price: string | null;
   sale_currency: "ETH" | "WETH" | null;
+  created_at: string;
+};
+
+type ActiveListing = {
+  artwork_id: string;
+  listing_id: string;
+  lister: string | null;
+  status: "active" | "cancelled" | "filled";
+  price: string | null;
+  currency: string | null;
   created_at: string;
 };
 
@@ -43,7 +55,7 @@ type TraitStat = {
 
 type Act = {
   id: string;
-  kind: "mint" | "list" | "sale" | "bid" | "transfer";
+  kind: "mint" | "list" | "buy" | "transfer" | "cancel_list" | "update_list";
   tx_hash: string | null;
   price_eth: string | number | null;
   actor: string | null;
@@ -74,7 +86,11 @@ export default function ArtworkDetail() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
+  // Listings + tabs
+  const [activeListing, setActiveListing] = useState<ActiveListing | null>(null);
   const [tab, setTab] = useState<"details" | "activity">("details");
+
+  // Activity + rarity
   const [acts, setActs] = useState<Act[]>([]);
   const [traitStats, setTraitStats] = useState<TraitStat[]>([]);
 
@@ -109,6 +125,7 @@ export default function ArtworkDetail() {
       if (!art?.metadata_url) return setMeta(null);
       try {
         const url = ipfsToHttp(art.metadata_url);
+        if (!url) return setMeta(null);
         const r = await fetch(url, { cache: "no-store" });
         if (!r.ok) throw new Error(`Metadata HTTP ${r.status}`);
         const j = (await r.json()) as Metadata;
@@ -123,7 +140,21 @@ export default function ArtworkDetail() {
     };
   }, [art?.metadata_url]);
 
-  // 3) Activity for this artwork
+  // 3) Load active listing (if you created the view)
+  useEffect(() => {
+    (async () => {
+      if (!art?.id) return setActiveListing(null);
+      const { data } = await supabase
+        .from("v_active_listing")
+        .select("*")
+        .eq("artwork_id", art.id)
+        .limit(1)
+        .maybeSingle();
+      setActiveListing((data as ActiveListing) || null);
+    })();
+  }, [art?.id]);
+
+  // 4) Activity for this artwork
   useEffect(() => {
     if (!art?.id) return;
     (async () => {
@@ -136,20 +167,21 @@ export default function ArtworkDetail() {
     })();
   }, [art?.id]);
 
-  // 4) Rarity stats (materialized view)
+  // 5) Rarity stats (materialized view or simple view)
   useEffect(() => {
     (async () => {
-      const { data, error } = await supabase.from("trait_stats_mv").select("*");
-      if (!error && data) setTraitStats(data as TraitStat[]);
+      const { data } =
+        (await supabase.from("trait_stats_mv").select("*")) ||
+        (await supabase.from("trait_stats").select("*"));
+      if (data) setTraitStats(data as TraitStat[]);
     })();
   }, []);
 
-  // 5) Media + rarity map
+  // 6) Compute media + rarity map BEFORE any early returns
   const media = useMemo(() => {
     if (!art) return { kind: "image" as const, poster: DEFAULT_COVER_URL, src: "" };
     const poster = art.cover_url || DEFAULT_COVER_URL;
 
-    // Solid DB cids first
     if (art.media_kind === "video" && art.animation_cid) {
       return { kind: "video" as const, poster, src: ipfsToHttp(`ipfs://${art.animation_cid}`) };
     }
@@ -157,12 +189,11 @@ export default function ArtworkDetail() {
       return { kind: "image" as const, poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) };
     }
 
-    // Fallback to metadata
     const metaAnim = meta?.animation_url ? ipfsToHttp(meta.animation_url) : "";
     const metaImg = meta?.image ? ipfsToHttp(meta.image) : "";
-
     if (metaAnim) return { kind: "video" as const, poster, src: metaAnim };
     if (metaImg) return { kind: "image" as const, poster, src: metaImg };
+
     return { kind: "image" as const, poster, src: poster };
   }, [art, meta]);
 
@@ -172,23 +203,45 @@ export default function ArtworkDetail() {
     return m;
   }, [traitStats]);
 
-  // Early returns AFTER hooks
+  // Early returns AFTER all hooks
   if (loading) return <Skeleton />;
   if (err) return <div className="p-6 text-red-400">Error: {err}</div>;
   if (!art) return <div className="p-6 text-neutral-400">Artwork not found.</div>;
 
+  // Title/desc & price
   const title = art.title || meta?.name || "Untitled";
   const desc = art.description || meta?.description || "";
   const royaltyPct = ((art.royalty_bps || 0) / 100).toFixed(2);
-  const price =
+  const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
+
+  // Prefer active listing if available; fallback to legacy sale fields
+  const priceFromListing =
+    activeListing?.status === "active" && activeListing?.price
+      ? `${activeListing.price} ${activeListing.currency || "ETH"}`
+      : null;
+
+  const legacyPrice =
     art.sale_kind === "fixed" && art.sale_price
       ? `${art.sale_price} ${art.sale_currency || "ETH"}`
       : null;
 
-  const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
+  const showPrice = priceFromListing || legacyPrice;
+
+  // OG/SEO image: prefer media.src if image; else poster; else default
+  const ogImage = media.kind === "image" ? (media.src || media.poster) : media.poster;
 
   return (
     <div className="mx-auto max-w-6xl p-6">
+      <Helmet>
+        <title>{title} • taedal</title>
+        {desc ? <meta name="description" content={desc.slice(0, 160)} /> : null}
+        <meta property="og:title" content={title} />
+        {desc ? <meta property="og:description" content={desc.slice(0, 200)} /> : null}
+        {ogImage ? <meta property="og:image" content={ogImage} /> : null}
+        <meta property="og:type" content="website" />
+        {ogImage ? <meta name="twitter:card" content="summary_large_image" /> : null}
+      </Helmet>
+
       <div className="grid gap-6 md:grid-cols-2">
         {/* Media */}
         <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950">
@@ -225,11 +278,18 @@ export default function ArtworkDetail() {
 
           <div className="mt-4 rounded-2xl border border-neutral-800 p-4">
             <div className="text-sm text-neutral-400">Price</div>
-            <div className="mt-1 text-2xl font-semibold">{price ?? "—"}</div>
+            <div className="mt-1 text-2xl font-semibold">{showPrice ?? "—"}</div>
+
+            {activeListing?.lister ? (
+              <div className="mt-1 text-xs text-neutral-500">
+                Listed by {activeListing.lister.slice(0, 6)}…{activeListing.lister.slice(-4)}
+              </div>
+            ) : null}
+
             <div className="mt-3 flex gap-2">
               <button
                 className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
-                disabled={!price}
+                disabled={!showPrice}
               >
                 Buy now
               </button>
@@ -237,6 +297,7 @@ export default function ArtworkDetail() {
                 Make offer
               </button>
             </div>
+
             <div className="mt-3 text-xs text-neutral-500">
               Royalty: {royaltyPct}% • Token ID: {art.token_id ?? "—"}
             </div>
@@ -326,9 +387,9 @@ export default function ArtworkDetail() {
       {/* Traits with rarity pills */}
       <div className="mt-8">
         <div className="mb-2 text-lg font-semibold">Traits</div>
-        {Array.isArray(meta?.attributes) && meta!.attributes!.length ? (
+        {attributes.length ? (
           <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-            {meta!.attributes!.map((t, i) => {
+            {attributes.map((t, i) => {
               const key = `${t.trait_type}::${String(t.value)}`;
               const s = rarityMap.get(key);
               const pct = s ? Math.round((s.freq || 0) * 1000) / 10 : null; // e.g., 12.3%
