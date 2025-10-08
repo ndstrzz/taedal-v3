@@ -8,8 +8,8 @@ type Attribute = { trait_type: string; value: string | number };
 type Metadata = {
   name?: string;
   description?: string;
-  image?: string;           // ipfs://... or http(s)
-  animation_url?: string;   // ipfs://... or http(s)
+  image?: string;
+  animation_url?: string;
   attributes?: Attribute[];
 };
 
@@ -29,6 +29,23 @@ type Artwork = {
   sale_kind: "fixed" | "auction" | null;
   sale_price: string | null;
   sale_currency: "ETH" | "WETH" | null;
+  created_at: string;
+};
+
+type TraitStat = {
+  trait_type: string;
+  value: string;
+  count: number;
+  total: number;
+  freq: number; // 0..1
+};
+
+type Act = {
+  id: string;
+  kind: "mint" | "list" | "sale" | "bid" | "transfer";
+  tx_hash: string | null;
+  price_eth: string | number | null;
+  actor: string | null;
   created_at: string;
 };
 
@@ -56,7 +73,11 @@ export default function ArtworkDetail() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  // 1) Load the artwork row
+  const [tab, setTab] = useState<"details" | "activity">("details");
+  const [acts, setActs] = useState<Act[]>([]);
+  const [traitStats, setTraitStats] = useState<TraitStat[]>([]);
+
+  // 1) Load artwork
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -75,12 +96,10 @@ export default function ArtworkDetail() {
         setLoading(false);
       }
     })();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [id]);
 
-  // 2) Fetch metadata JSON (traits, image/animation fallbacks)
+  // 2) Load metadata JSON
   useEffect(() => {
     let aborted = false;
     (async () => {
@@ -99,15 +118,35 @@ export default function ArtworkDetail() {
     return () => { aborted = true; };
   }, [art?.metadata_url]);
 
-  // 3) Decide which media to show (DB CIDs first, then metadata)
-  const media = useMemo(() => {
-    if (!art) {
-      return { kind: "image" as const, poster: DEFAULT_COVER_URL, src: "" };
-    }
+  // 3) Activity for this artwork
+  useEffect(() => {
+    if (!art?.id) return;
+    (async () => {
+      const { data, error } = await supabase
+        .from("activity")
+        .select("*")
+        .eq("artwork_id", art.id)
+        .order("created_at", { ascending: false });
+      if (!error && data) setActs(data as Act[]);
+    })();
+  }, [art?.id]);
 
+  // 4) Rarity stats (grab all once; light until you have thousands)
+  useEffect(() => {
+  (async () => {
+    const { data, error } = await supabase
+      .from("trait_stats_mv")   // ⬅️ was "trait_stats"
+      .select("*");
+    if (!error && data) setTraitStats(data as TraitStat[]);
+  })();
+}, []);
+
+
+  // Decide media
+  const media = useMemo(() => {
+    if (!art) return { kind: "image" as const, poster: DEFAULT_COVER_URL, src: "" };
     const poster = art.cover_url || DEFAULT_COVER_URL;
 
-    // Prefer DB-provided CIDs
     if (art.media_kind === "video" && art.animation_cid) {
       return { kind: "video" as const, poster, src: ipfsToHttp(`ipfs://${art.animation_cid}`) };
     }
@@ -115,13 +154,11 @@ export default function ArtworkDetail() {
       return { kind: "image" as const, poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) };
     }
 
-    // Fallback to metadata
     const metaAnim = meta?.animation_url ? ipfsToHttp(meta.animation_url) : "";
     const metaImg  = meta?.image ? ipfsToHttp(meta.image) : "";
 
     if (metaAnim) return { kind: "video" as const, poster, src: metaAnim };
     if (metaImg)  return { kind: "image" as const, poster, src: metaImg };
-
     return { kind: "image" as const, poster, src: poster };
   }, [art, meta]);
 
@@ -139,25 +176,24 @@ export default function ArtworkDetail() {
 
   const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
 
+  // Map rarity for quick lookup
+  const rarityMap = useMemo(() => {
+    const m = new Map<string, TraitStat>();
+    for (const s of traitStats) {
+      m.set(`${s.trait_type}::${s.value}`, s);
+    }
+    return m;
+  }, [traitStats]);
+
   return (
     <div className="mx-auto max-w-6xl p-6">
       <div className="grid gap-6 md:grid-cols-2">
         {/* Media */}
         <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950">
           {media.kind === "video" ? (
-            <video
-              src={media.src}
-              poster={media.poster || undefined}
-              className="h-full w-full"
-              controls
-              playsInline
-            />
+            <video src={media.src} poster={media.poster || undefined} className="h-full w-full" controls playsInline />
           ) : (
-            <img
-              src={media.src || media.poster}
-              alt={title}
-              className="h-full w-full object-contain"
-            />
+            <img src={media.src || media.poster} alt={title} className="h-full w-full object-contain" />
           )}
         </div>
 
@@ -170,87 +206,123 @@ export default function ArtworkDetail() {
               <Link to={`/u/${art.owner}`} className="text-neutral-200 hover:underline">
                 {art.owner.slice(0, 6)}…{art.owner.slice(-4)}
               </Link>
-            ) : (
-              "unknown"
-            )}
+            ) : ("unknown")}
           </div>
 
-          {/* Buy box */}
           <div className="mt-4 rounded-2xl border border-neutral-800 p-4">
             <div className="text-sm text-neutral-400">Price</div>
-            <div className="mt-1 text-2xl font-semibold">
-              {price ? price : "—"}
-            </div>
+            <div className="mt-1 text-2xl font-semibold">{price ?? "—"}</div>
             <div className="mt-3 flex gap-2">
-              <button
-                type="button"
-                disabled={!price}
-                className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
-                title={price ? "Buy now (coming soon)" : "Not listed"}
-              >
+              <button className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40" disabled={!price}>
                 Buy now
               </button>
-              <button
-                type="button"
-                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
-                title="Offers coming soon"
-              >
+              <button className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900">
                 Make offer
               </button>
             </div>
-
             <div className="mt-3 text-xs text-neutral-500">
               Royalty: {royaltyPct}% • Token ID: {art.token_id ?? "—"}
             </div>
           </div>
 
-          {/* Description */}
-          {desc && (
-            <div className="mt-6">
-              <div className="mb-1 text-sm font-medium text-neutral-200">About</div>
-              <div className="whitespace-pre-wrap text-sm text-neutral-300">
-                {desc}
+          {/* Tabs */}
+          <div className="mt-6 flex gap-2">
+            {(["details","activity"] as const).map(t => (
+              <button key={t}
+                className={`rounded-full border px-3 py-1 text-sm capitalize ${tab===t?"border-neutral-500":"border-neutral-800 hover:bg-neutral-900"}`}
+                onClick={()=>setTab(t)}
+              >{t}</button>
+            ))}
+          </div>
+
+          {tab === "details" && (
+            <div className="mt-4">
+              {desc && (
+                <>
+                  <div className="mb-1 text-sm font-medium text-neutral-200">About</div>
+                  <div className="whitespace-pre-wrap text-sm text-neutral-300">{desc}</div>
+                </>
+              )}
+
+              {/* Chain details */}
+              <div className="mt-6">
+                <div className="mb-1 text-sm font-medium text-neutral-200">Blockchain details</div>
+                <div className="grid grid-cols-2 gap-2 text-xs text-neutral-400">
+                  <div className="rounded-lg border border-neutral-800 p-2">
+                    <div className="text-neutral-500">Metadata URI</div>
+                    <a className="truncate text-neutral-300 hover:underline"
+                       href={ipfsToHttp(art.metadata_url || "")}
+                       target="_blank" rel="noreferrer">
+                      {art.metadata_url || "—"}
+                    </a>
+                  </div>
+                  <div className="rounded-lg border border-neutral-800 p-2">
+                    <div className="text-neutral-500">Tx hash</div>
+                    <div className="truncate text-neutral-300">{art.tx_hash || "—"}</div>
+                  </div>
+                </div>
               </div>
             </div>
           )}
 
-          {/* Chain details */}
-          <div className="mt-6">
-            <div className="mb-1 text-sm font-medium text-neutral-200">Blockchain details</div>
-            <div className="grid grid-cols-2 gap-2 text-xs text-neutral-400">
-              <div className="rounded-lg border border-neutral-800 p-2">
-                <div className="text-neutral-500">Metadata URI</div>
-                <a
-                  className="truncate text-neutral-300 hover:underline"
-                  href={ipfsToHttp(art.metadata_url || "")}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {art.metadata_url || "—"}
-                </a>
-              </div>
-              <div className="rounded-lg border border-neutral-800 p-2">
-                <div className="text-neutral-500">Tx hash</div>
-                <div className="truncate text-neutral-300">{art.tx_hash || "—"}</div>
-              </div>
+          {tab === "activity" && (
+            <div className="mt-4 space-y-2">
+              {acts.length === 0 ? (
+                <div className="text-sm text-neutral-400">No activity yet.</div>
+              ) : acts.map(a => (
+                <div key={a.id} className="flex items-center justify-between rounded-xl border border-neutral-800 p-3 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize">
+                      {a.kind}
+                    </span>
+                    <span className="text-neutral-300">
+                      {a.actor ? `${a.actor.slice(0,6)}…${a.actor.slice(-4)}` : "Someone"}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    {a.price_eth ? <div className="text-neutral-200">{a.price_eth} ETH</div> : null}
+                    <div className="text-xs text-neutral-500">
+                      {new Date(a.created_at).toLocaleString()}
+                      {a.tx_hash ? ` • ${a.tx_hash.slice(0,8)}…` : ""}
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
-          </div>
+          )}
         </div>
       </div>
 
-      {/* Traits */}
+      {/* Traits with rarity pills */}
       <div className="mt-8">
         <div className="mb-2 text-lg font-semibold">Traits</div>
         {attributes.length ? (
           <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-            {attributes.map((t, i) => (
-              <li key={i} className="rounded-xl border border-neutral-800 p-3">
-                <div className="text-xs uppercase tracking-wide text-neutral-500">
-                  {t.trait_type}
-                </div>
-                <div className="text-sm text-neutral-200">{String(t.value)}</div>
-              </li>
-            ))}
+            {attributes.map((t, i) => {
+              const key = `${t.trait_type}::${String(t.value)}`;
+              const s = rarityMap.get(key);
+              const pct = s ? Math.round((s.freq || 0) * 1000) / 10 : null; // e.g., 12.3%
+              return (
+                <li key={i} className="rounded-xl border border-neutral-800 p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-neutral-500">{t.trait_type}</div>
+                      <div className="text-sm text-neutral-200">{String(t.value)}</div>
+                    </div>
+                    <div className="text-right">
+                      {pct !== null ? (
+                        <>
+                          <div className="text-xs text-neutral-400">{pct}%</div>
+                          <div className="text-[11px] text-neutral-500">{s?.count ?? 0} of {s?.total ?? 0}</div>
+                        </>
+                      ) : (
+                        <div className="text-xs text-neutral-500">—</div>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         ) : (
           <div className="text-sm text-neutral-400">No traits.</div>
