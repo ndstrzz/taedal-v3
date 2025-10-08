@@ -1,64 +1,62 @@
-#!/usr/bin/env node
+// scripts/backfill-traits.mjs
 import 'dotenv/config';
 import fetch from 'node-fetch';
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY; // service role ONLY
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error('Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env');
-  process.exit(1);
-}
-const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-function ipfsToHttp(uri) {
-  if (!uri) return '';
-  if (uri.startsWith('ipfs://')) return 'https://ipfs.io/ipfs/' + uri.slice(7);
-  if (uri.includes('gateway.pinata.cloud/ipfs/')) {
-    return uri.replace('https://gateway.pinata.cloud/ipfs/', 'https://ipfs.io/ipfs/');
-  }
-  return uri;
-}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const ipfsToHttp = (uri) =>
+  !uri ? '' :
+  uri.startsWith('ipfs://') ? 'https://ipfs.io/ipfs/' + uri.replace('ipfs://','') : uri;
 
-async function main() {
-  console.log('[backfill] start');
-
-  // get published artworks missing attributes
-  const { data: rows, error } = await sb
+async function run() {
+  const { data: arts, error } = await sb
     .from('artworks')
-    .select('id, metadata_url')
-    .eq('status', 'published');
+    .select('id, owner, metadata_url')
+    .eq('status','published')
+    .order('created_at', { ascending: true });
   if (error) throw error;
 
-  let added = 0;
-  for (const row of rows) {
-    const url = ipfsToHttp(row.metadata_url);
-    if (!url) continue;
-    try {
-      const r = await fetch(url, { timeout: 15000 });
-      if (!r.ok) { console.warn('bad metadata', row.id, r.status); continue; }
-      const j = await r.json();
-      const attrs = Array.isArray(j.attributes) ? j.attributes : [];
-      const toInsert = attrs
-        .map(a => ({
-          artwork_id: row.id,
-          trait_type: String(a.trait_type ?? '').trim(),
-          value: String(a.value ?? '').trim(),
-        }))
-        .filter(a => a.trait_type && a.value);
+  let inserted = 0;
+  for (const a of (arts || [])) {
+    if (!a.metadata_url) continue;
 
-      if (toInsert.length) {
-        const { error: insErr } = await sb
-          .from('artwork_attributes')
-          .upsert(toInsert, { onConflict: 'artwork_id,trait_type,value' });
-        if (insErr) console.error('upsert error', row.id, insErr);
-        else added += toInsert.length;
+    // Check if already has attributes
+    const { data: existing, error: e2 } = await sb
+      .from('artwork_attributes')
+      .select('artwork_id', { count: 'exact', head: true })
+      .eq('artwork_id', a.id);
+    if (e2) throw e2;
+    if (existing && existing.length) continue;
+
+    const url = ipfsToHttp(a.metadata_url);
+    try {
+      const res = await fetch(url, { timeout: 20000 });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const meta = await res.json();
+
+      const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
+      const rows = attrs
+        .map(t => ({
+          artwork_id: a.id,
+          trait_type: String(t.trait_type ?? t.traitType ?? '').trim(),
+          value: String(t.value ?? '').trim()
+        }))
+        .filter(r => r.trait_type && r.value);
+
+      if (rows.length) {
+        const { error: insErr } = await sb.from('artwork_attributes').insert(rows);
+        if (insErr) throw insErr;
+        inserted += rows.length;
+        console.log(`+ ${a.id} (${rows.length} traits)`);
       }
+      await sleep(250);
     } catch (e) {
-      console.warn('fetch fail', row.id, e.message);
+      console.warn(`skip ${a.id}:`, e.message || e);
     }
   }
-  console.log(`[backfill] done. inserted/updated ${added} trait rows`);
+  console.log(`Done. Inserted ${inserted} trait rows.`);
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+run().catch(e => { console.error(e); process.exit(1); });

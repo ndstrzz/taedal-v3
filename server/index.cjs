@@ -373,6 +373,98 @@ app.post('/api/admin/refresh-traits', async (_req, res) => {
   }
 });
 
+// server/index.js (add near top, after sb client)
+/**
+ * Create listing
+ * body: { artwork_id, lister, price, currency? }
+ */
+app.post('/api/listings/create', express.json(), async (req, res) => {
+  try {
+    const { artwork_id, lister, price, currency = 'ETH' } = req.body || {};
+    if (!artwork_id || !lister || !price) return res.status(400).json({ error: 'Missing fields' });
+
+    const { data, error } = await sb
+      .from('listings')
+      .insert({ artwork_id, lister, price, currency })
+      .select('*').single();
+    if (error) throw error;
+
+    await sb.from('activity').insert({
+      artwork_id,
+      kind: 'list',
+      actor: lister,
+      note: `Listed for ${price} ${currency}`
+    });
+
+    res.json({ ok: true, listing: data });
+  } catch (e) {
+    console.error('[listings/create]', e);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+/**
+ * Cancel listing
+ * body: { listing_id, actor }
+ */
+app.post('/api/listings/cancel', express.json(), async (req, res) => {
+  try {
+    const { listing_id, actor } = req.body || {};
+    if (!listing_id || !actor) return res.status(400).json({ error: 'Missing fields' });
+
+    const { data: lst, error: e0 } = await sb.from('listings')
+      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+      .eq('id', listing_id)
+      .select('*').single();
+    if (e0) throw e0;
+
+    await sb.from('activity').insert({
+      artwork_id: lst.artwork_id,
+      kind: 'cancel_list',
+      actor,
+      note: 'Listing cancelled'
+    });
+
+    res.json({ ok: true, listing: lst });
+  } catch (e) {
+    console.error('[listings/cancel]', e);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+/**
+ * Fill listing (off-chain “buy now”, you still process the on-chain transfer separately)
+ * body: { listing_id, buyer, tx_hash? }
+ */
+app.post('/api/listings/fill', express.json(), async (req, res) => {
+  try {
+    const { listing_id, buyer, tx_hash } = req.body || {};
+    if (!listing_id || !buyer) return res.status(400).json({ error: 'Missing fields' });
+
+    // mark listing filled
+    const { data: lst, error: e1 } = await sb.from('listings')
+      .update({ status: 'filled', updated_at: new Date().toISOString() })
+      .eq('id', listing_id)
+      .select('*').single();
+    if (e1) throw e1;
+
+    // activity
+    await sb.from('activity').insert({
+      artwork_id: lst.artwork_id,
+      kind: 'buy',
+      actor: buyer,
+      tx_hash,
+      note: `Bought for ${lst.price} ${lst.currency}`
+    });
+
+    res.json({ ok: true, listing: lst });
+  } catch (e) {
+    console.error('[listings/fill]', e);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+
 // ---- Start ----------------------------------------------------------------
 
 app.listen(PORT, () => {
