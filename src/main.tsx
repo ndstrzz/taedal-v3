@@ -4,12 +4,15 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./index.css";
 import { ToastProvider } from "./components/Toaster";
-import { AuthProvider } from "./state/AuthContext";       // ⬅️ add this
+import { AuthProvider } from "./state/AuthContext";
+import { initSentry } from "./sentry";
+
+initSentry();
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
-      <AuthProvider>                                     {/* ⬅️ wrap the app */}
+      <AuthProvider>
         <ToastProvider>
           <App />
         </ToastProvider>

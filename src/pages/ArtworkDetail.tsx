@@ -1,3 +1,4 @@
+// src/pages/ArtworkDetail.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
@@ -66,10 +67,8 @@ function Skeleton() {
 }
 
 export default function ArtworkDetail() {
-  // --- params
   const { id } = useParams<{ id: string }>();
 
-  // --- state
   const [art, setArt] = useState<Artwork | null>(null);
   const [meta, setMeta] = useState<Metadata | null>(null);
   const [loading, setLoading] = useState(true);
@@ -82,9 +81,9 @@ export default function ArtworkDetail() {
   // 1) Load artwork
   useEffect(() => {
     let mounted = true;
-    setLoading(true);
     (async () => {
       try {
+        setLoading(true);
         const { data, error } = await supabase
           .from("artworks")
           .select("*")
@@ -93,9 +92,9 @@ export default function ArtworkDetail() {
         if (error) throw error;
         if (mounted) setArt(data as unknown as Artwork);
       } catch (e: any) {
-        if (mounted) setErr(e?.message || "Failed to load artwork");
+        setErr(e?.message || "Failed to load artwork");
       } finally {
-        if (mounted) setLoading(false);
+        setLoading(false);
       }
     })();
     return () => {
@@ -103,20 +102,13 @@ export default function ArtworkDetail() {
     };
   }, [id]);
 
-  // 2) Load metadata JSON (if present)
+  // 2) Load metadata JSON
   useEffect(() => {
     let aborted = false;
     (async () => {
-      if (!art?.metadata_url) {
-        if (!aborted) setMeta(null);
-        return;
-      }
+      if (!art?.metadata_url) return setMeta(null);
       try {
         const url = ipfsToHttp(art.metadata_url);
-        if (!url) {
-          if (!aborted) setMeta(null);
-          return;
-        }
         const r = await fetch(url, { cache: "no-store" });
         if (!r.ok) throw new Error(`Metadata HTTP ${r.status}`);
         const j = (await r.json()) as Metadata;
@@ -144,7 +136,7 @@ export default function ArtworkDetail() {
     })();
   }, [art?.id]);
 
-  // 4) Rarity stats (read from materialized view)
+  // 4) Rarity stats: read from the MV
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase.from("trait_stats_mv").select("*");
@@ -152,11 +144,10 @@ export default function ArtworkDetail() {
     })();
   }, []);
 
-  // 5) Decide media (poster + src)
+  // Decide media
   const media = useMemo(() => {
     if (!art)
       return { kind: "image" as const, poster: DEFAULT_COVER_URL, src: "" };
-
     const poster = art.cover_url || DEFAULT_COVER_URL;
 
     if (art.media_kind === "video" && art.animation_cid) {
@@ -182,12 +173,10 @@ export default function ArtworkDetail() {
     return { kind: "image" as const, poster, src: poster };
   }, [art, meta]);
 
-  // early returns (after hooks)
   if (loading) return <Skeleton />;
   if (err) return <div className="p-6 text-red-400">Error: {err}</div>;
   if (!art) return <div className="p-6 text-neutral-400">Artwork not found.</div>;
 
-  // render data
   const title = art.title || meta?.name || "Untitled";
   const desc = art.description || meta?.description || "";
   const royaltyPct = ((art.royalty_bps || 0) / 100).toFixed(2);
