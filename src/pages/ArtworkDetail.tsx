@@ -66,8 +66,10 @@ function Skeleton() {
 }
 
 export default function ArtworkDetail() {
+  // --- params
   const { id } = useParams<{ id: string }>();
 
+  // --- state
   const [art, setArt] = useState<Artwork | null>(null);
   const [meta, setMeta] = useState<Metadata | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,9 +82,9 @@ export default function ArtworkDetail() {
   // 1) Load artwork
   useEffect(() => {
     let mounted = true;
+    setLoading(true);
     (async () => {
       try {
-        setLoading(true);
         const { data, error } = await supabase
           .from("artworks")
           .select("*")
@@ -91,21 +93,30 @@ export default function ArtworkDetail() {
         if (error) throw error;
         if (mounted) setArt(data as unknown as Artwork);
       } catch (e: any) {
-        setErr(e?.message || "Failed to load artwork");
+        if (mounted) setErr(e?.message || "Failed to load artwork");
       } finally {
-        setLoading(false);
+        if (mounted) setLoading(false);
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [id]);
 
-  // 2) Load metadata JSON
+  // 2) Load metadata JSON (if present)
   useEffect(() => {
     let aborted = false;
     (async () => {
-      if (!art?.metadata_url) return setMeta(null);
+      if (!art?.metadata_url) {
+        if (!aborted) setMeta(null);
+        return;
+      }
       try {
         const url = ipfsToHttp(art.metadata_url);
+        if (!url) {
+          if (!aborted) setMeta(null);
+          return;
+        }
         const r = await fetch(url, { cache: "no-store" });
         if (!r.ok) throw new Error(`Metadata HTTP ${r.status}`);
         const j = (await r.json()) as Metadata;
@@ -115,7 +126,9 @@ export default function ArtworkDetail() {
         if (!aborted) setMeta(null);
       }
     })();
-    return () => { aborted = true; };
+    return () => {
+      aborted = true;
+    };
   }, [art?.metadata_url]);
 
   // 3) Activity for this artwork
@@ -131,50 +144,61 @@ export default function ArtworkDetail() {
     })();
   }, [art?.id]);
 
-  // 4) Rarity stats (grab all once; light until you have thousands)
+  // 4) Rarity stats (read from materialized view)
   useEffect(() => {
-  (async () => {
-    const { data, error } = await supabase
-      .from("trait_stats_mv")   // ⬅️ was "trait_stats"
-      .select("*");
-    if (!error && data) setTraitStats(data as TraitStat[]);
-  })();
-}, []);
+    (async () => {
+      const { data, error } = await supabase.from("trait_stats_mv").select("*");
+      if (!error && data) setTraitStats(data as TraitStat[]);
+    })();
+  }, []);
 
-
-  // Decide media
+  // 5) Decide media (poster + src)
   const media = useMemo(() => {
-    if (!art) return { kind: "image" as const, poster: DEFAULT_COVER_URL, src: "" };
+    if (!art)
+      return { kind: "image" as const, poster: DEFAULT_COVER_URL, src: "" };
+
     const poster = art.cover_url || DEFAULT_COVER_URL;
 
     if (art.media_kind === "video" && art.animation_cid) {
-      return { kind: "video" as const, poster, src: ipfsToHttp(`ipfs://${art.animation_cid}`) };
+      return {
+        kind: "video" as const,
+        poster,
+        src: ipfsToHttp(`ipfs://${art.animation_cid}`),
+      };
     }
     if (art.image_cid) {
-      return { kind: "image" as const, poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) };
+      return {
+        kind: "image" as const,
+        poster,
+        src: ipfsToHttp(`ipfs://${art.image_cid}`),
+      };
     }
 
     const metaAnim = meta?.animation_url ? ipfsToHttp(meta.animation_url) : "";
-    const metaImg  = meta?.image ? ipfsToHttp(meta.image) : "";
+    const metaImg = meta?.image ? ipfsToHttp(meta.image) : "";
 
     if (metaAnim) return { kind: "video" as const, poster, src: metaAnim };
-    if (metaImg)  return { kind: "image" as const, poster, src: metaImg };
+    if (metaImg) return { kind: "image" as const, poster, src: metaImg };
     return { kind: "image" as const, poster, src: poster };
   }, [art, meta]);
 
+  // early returns (after hooks)
   if (loading) return <Skeleton />;
   if (err) return <div className="p-6 text-red-400">Error: {err}</div>;
   if (!art) return <div className="p-6 text-neutral-400">Artwork not found.</div>;
 
+  // render data
   const title = art.title || meta?.name || "Untitled";
-  const desc  = art.description || meta?.description || "";
+  const desc = art.description || meta?.description || "";
   const royaltyPct = ((art.royalty_bps || 0) / 100).toFixed(2);
   const price =
     art.sale_kind === "fixed" && art.sale_price
       ? `${art.sale_price} ${art.sale_currency || "ETH"}`
       : null;
 
-  const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
+  const attributes: Attribute[] = Array.isArray(meta?.attributes)
+    ? (meta!.attributes as Attribute[])
+    : [];
 
   // Map rarity for quick lookup
   const rarityMap = useMemo(() => {
@@ -191,9 +215,19 @@ export default function ArtworkDetail() {
         {/* Media */}
         <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950">
           {media.kind === "video" ? (
-            <video src={media.src} poster={media.poster || undefined} className="h-full w-full" controls playsInline />
+            <video
+              src={media.src}
+              poster={media.poster || undefined}
+              className="h-full w-full"
+              controls
+              playsInline
+            />
           ) : (
-            <img src={media.src || media.poster} alt={title} className="h-full w-full object-contain" />
+            <img
+              src={media.src || media.poster}
+              alt={title}
+              className="h-full w-full object-contain"
+            />
           )}
         </div>
 
@@ -203,17 +237,25 @@ export default function ArtworkDetail() {
           <div className="mt-1 text-sm text-neutral-400">
             Owned by{" "}
             {art.owner ? (
-              <Link to={`/u/${art.owner}`} className="text-neutral-200 hover:underline">
+              <Link
+                to={`/u/${art.owner}`}
+                className="text-neutral-200 hover:underline"
+              >
                 {art.owner.slice(0, 6)}…{art.owner.slice(-4)}
               </Link>
-            ) : ("unknown")}
+            ) : (
+              "unknown"
+            )}
           </div>
 
           <div className="mt-4 rounded-2xl border border-neutral-800 p-4">
             <div className="text-sm text-neutral-400">Price</div>
             <div className="mt-1 text-2xl font-semibold">{price ?? "—"}</div>
             <div className="mt-3 flex gap-2">
-              <button className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40" disabled={!price}>
+              <button
+                className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
+                disabled={!price}
+              >
                 Buy now
               </button>
               <button className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900">
@@ -227,11 +269,18 @@ export default function ArtworkDetail() {
 
           {/* Tabs */}
           <div className="mt-6 flex gap-2">
-            {(["details","activity"] as const).map(t => (
-              <button key={t}
-                className={`rounded-full border px-3 py-1 text-sm capitalize ${tab===t?"border-neutral-500":"border-neutral-800 hover:bg-neutral-900"}`}
-                onClick={()=>setTab(t)}
-              >{t}</button>
+            {(["details", "activity"] as const).map((t) => (
+              <button
+                key={t}
+                className={`rounded-full border px-3 py-1 text-sm capitalize ${
+                  tab === t
+                    ? "border-neutral-500"
+                    : "border-neutral-800 hover:bg-neutral-900"
+                }`}
+                onClick={() => setTab(t)}
+              >
+                {t}
+              </button>
             ))}
           </div>
 
@@ -239,26 +288,37 @@ export default function ArtworkDetail() {
             <div className="mt-4">
               {desc && (
                 <>
-                  <div className="mb-1 text-sm font-medium text-neutral-200">About</div>
-                  <div className="whitespace-pre-wrap text-sm text-neutral-300">{desc}</div>
+                  <div className="mb-1 text-sm font-medium text-neutral-200">
+                    About
+                  </div>
+                  <div className="whitespace-pre-wrap text-sm text-neutral-300">
+                    {desc}
+                  </div>
                 </>
               )}
 
               {/* Chain details */}
               <div className="mt-6">
-                <div className="mb-1 text-sm font-medium text-neutral-200">Blockchain details</div>
+                <div className="mb-1 text-sm font-medium text-neutral-200">
+                  Blockchain details
+                </div>
                 <div className="grid grid-cols-2 gap-2 text-xs text-neutral-400">
                   <div className="rounded-lg border border-neutral-800 p-2">
                     <div className="text-neutral-500">Metadata URI</div>
-                    <a className="truncate text-neutral-300 hover:underline"
-                       href={ipfsToHttp(art.metadata_url || "")}
-                       target="_blank" rel="noreferrer">
+                    <a
+                      className="truncate text-neutral-300 hover:underline"
+                      href={ipfsToHttp(art.metadata_url || "")}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
                       {art.metadata_url || "—"}
                     </a>
                   </div>
                   <div className="rounded-lg border border-neutral-800 p-2">
                     <div className="text-neutral-500">Tx hash</div>
-                    <div className="truncate text-neutral-300">{art.tx_hash || "—"}</div>
+                    <div className="truncate text-neutral-300">
+                      {art.tx_hash || "—"}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -269,25 +329,34 @@ export default function ArtworkDetail() {
             <div className="mt-4 space-y-2">
               {acts.length === 0 ? (
                 <div className="text-sm text-neutral-400">No activity yet.</div>
-              ) : acts.map(a => (
-                <div key={a.id} className="flex items-center justify-between rounded-xl border border-neutral-800 p-3 text-sm">
-                  <div className="flex items-center gap-2">
-                    <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize">
-                      {a.kind}
-                    </span>
-                    <span className="text-neutral-300">
-                      {a.actor ? `${a.actor.slice(0,6)}…${a.actor.slice(-4)}` : "Someone"}
-                    </span>
-                  </div>
-                  <div className="text-right">
-                    {a.price_eth ? <div className="text-neutral-200">{a.price_eth} ETH</div> : null}
-                    <div className="text-xs text-neutral-500">
-                      {new Date(a.created_at).toLocaleString()}
-                      {a.tx_hash ? ` • ${a.tx_hash.slice(0,8)}…` : ""}
+              ) : (
+                acts.map((a) => (
+                  <div
+                    key={a.id}
+                    className="flex items-center justify-between rounded-xl border border-neutral-800 p-3 text-sm"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize">
+                        {a.kind}
+                      </span>
+                      <span className="text-neutral-300">
+                        {a.actor
+                          ? `${a.actor.slice(0, 6)}…${a.actor.slice(-4)}`
+                          : "Someone"}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      {a.price_eth ? (
+                        <div className="text-neutral-200">{a.price_eth} ETH</div>
+                      ) : null}
+                      <div className="text-xs text-neutral-500">
+                        {new Date(a.created_at).toLocaleString()}
+                        {a.tx_hash ? ` • ${a.tx_hash.slice(0, 8)}…` : ""}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           )}
         </div>
@@ -301,19 +370,26 @@ export default function ArtworkDetail() {
             {attributes.map((t, i) => {
               const key = `${t.trait_type}::${String(t.value)}`;
               const s = rarityMap.get(key);
-              const pct = s ? Math.round((s.freq || 0) * 1000) / 10 : null; // e.g., 12.3%
+              const pct =
+                s != null ? Math.round((s.freq || 0) * 1000) / 10 : null; // e.g., 12.3%
               return (
                 <li key={i} className="rounded-xl border border-neutral-800 p-3">
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="text-xs uppercase tracking-wide text-neutral-500">{t.trait_type}</div>
-                      <div className="text-sm text-neutral-200">{String(t.value)}</div>
+                      <div className="text-xs uppercase tracking-wide text-neutral-500">
+                        {t.trait_type}
+                      </div>
+                      <div className="text-sm text-neutral-200">
+                        {String(t.value)}
+                      </div>
                     </div>
                     <div className="text-right">
                       {pct !== null ? (
                         <>
                           <div className="text-xs text-neutral-400">{pct}%</div>
-                          <div className="text-[11px] text-neutral-500">{s?.count ?? 0} of {s?.total ?? 0}</div>
+                          <div className="text-[11px] text-neutral-500">
+                            {s?.count ?? 0} of {s?.total ?? 0}
+                          </div>
                         </>
                       ) : (
                         <div className="text-xs text-neutral-500">—</div>
