@@ -63,6 +63,15 @@ type Act = {
   created_at: string;
 };
 
+type BestOffer = {
+  artwork_id: string;
+  offer_id: string;
+  offerer: string;
+  price: string;      // numeric from PG arrives as string
+  currency: string;
+  created_at: string;
+};
+
 function Skeleton() {
   return (
     <div className="mx-auto max-w-6xl p-6">
@@ -91,6 +100,7 @@ export default function ArtworkDetail() {
   const [acts, setActs] = useState<Act[]>([]);
   const [traitStats, setTraitStats] = useState<TraitStat[]>([]);
   const [listing, setListing] = useState<Listing | null>(null);
+  const [bestOffer, setBestOffer] = useState<BestOffer | null>(null);
 
   const [showBuy, setShowBuy] = useState(false);
   const [showOffer, setShowOffer] = useState(false);
@@ -148,7 +158,6 @@ export default function ArtworkDetail() {
       .order("created_at", { ascending: false });
     if (data) setActs(data as Act[]);
   }
-
   useEffect(() => {
     if (art?.id) fetchActivity(art.id);
   }, [art?.id]);
@@ -158,7 +167,6 @@ export default function ArtworkDetail() {
     (async () => {
       let { data, error } = await supabase.from("trait_stats").select("*");
       if (error) {
-        // fall back to MV name if the view isn't present
         const alt = await supabase.from("trait_stats_mv").select("*");
         data = alt.data || null;
       }
@@ -168,7 +176,6 @@ export default function ArtworkDetail() {
 
   // 5) Active listing — prefer helper view, fall back to listings table
   async function fetchListing(artworkId: string) {
-    // try the optional helper view first
     const viaView = await supabase
       .from("v_active_listing")
       .select("*")
@@ -178,7 +185,6 @@ export default function ArtworkDetail() {
       setListing(viaView.data as unknown as Listing);
       return;
     }
-    // fallback to base table
     const fallback = await supabase
       .from("listings")
       .select("*")
@@ -190,9 +196,22 @@ export default function ArtworkDetail() {
     if (fallback.data) setListing(fallback.data as unknown as Listing);
     else setListing(null);
   }
-
   useEffect(() => {
     if (id) fetchListing(id);
+  }, [id]);
+
+  // 5b) Best offer (optional helper view v_best_offer)
+  useEffect(() => {
+    if (!id) return;
+    (async () => {
+      const { data, error } = await supabase
+        .from("v_best_offer")
+        .select("*")
+        .eq("artwork_id", id)
+        .maybeSingle();
+      if (!error && data) setBestOffer(data as unknown as BestOffer);
+      else setBestOffer(null);
+    })();
   }, [id]);
 
   // Refetch everything after a write (buy/offer)
@@ -245,7 +264,6 @@ export default function ArtworkDetail() {
       : null;
 
   const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
-
   const listingId = listing?.listing_id || listing?.id || null;
 
   return (
@@ -287,6 +305,16 @@ export default function ArtworkDetail() {
           <div className="mt-4 rounded-2xl border border-neutral-800 p-4">
             <div className="text-sm text-neutral-400">Price</div>
             <div className="mt-1 text-2xl font-semibold">{displayPrice ?? "—"}</div>
+
+            {bestOffer ? (
+              <div className="mt-2 text-sm text-neutral-400">
+                Best offer:{" "}
+                <span className="text-neutral-200">
+                  {bestOffer.price} {bestOffer.currency}
+                </span>
+              </div>
+            ) : null}
+
             <div className="mt-3 flex gap-2">
               <button
                 className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
