@@ -44,56 +44,53 @@ export default function CheckoutModal({
   if (!open) return null;
 
   async function handleCardCheckout() {
-  try {
-    setBusy(true);
+    try {
+      setBusy(true);
 
-    const r = await fetch(
-      `${API_BASE.replace(/\/$/, "")}/api/checkout/create-stripe-session`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
+      const r = await fetch(
+        `${API_BASE.replace(/\/$/, "")}/api/checkout/create-stripe-session`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
+        }
+      );
+      if (!r.ok) throw new Error(`Failed (${r.status})`);
+      const { url, sessionId } = await r.json();
+
+      // Preferred: simple redirect URL from the server
+      if (url) {
+        window.location.href = url;
+        return;
       }
-    );
-    if (!r.ok) throw new Error(`Failed (${r.status})`);
-    const { url, sessionId } = await r.json();
 
-    // Preferred: simple redirect using the server-provided URL (no Stripe.js needed)
-    if (url) {
-      window.location.href = url;
-      return;
+      // Optional fallback to Stripe.js
+      if (!STRIPE_PK || !sessionId) throw new Error("No checkout session available");
+      const stripe = await loadStripe(STRIPE_PK);
+      if (!stripe) throw new Error("Stripe failed to load");
+      const { error } = await (stripe as any).redirectToCheckout({ sessionId });
+      if (error) throw error;
+    } catch (e: any) {
+      toast({
+        variant: "error",
+        title: "Card checkout failed",
+        description: String(e?.message || e),
+      });
+      setBusy(false);
     }
-
-    // Optional fallback: Stripe.js redirect if `url` wasn’t returned
-    const STRIPE_PK = import.meta.env.VITE_STRIPE_PUBKEY as string | undefined;
-    if (!STRIPE_PK || !sessionId) {
-      throw new Error("No checkout URL or session available");
-    }
-
-    const stripe = await loadStripe(STRIPE_PK);
-    if (!stripe) throw new Error("Stripe failed to load");
-    // Cast to any to dodge TS type collisions in your workspace
-    const { error } = await (stripe as any).redirectToCheckout({ sessionId });
-    if (error) throw error;
-  } catch (e: any) {
-    toast({
-      variant: "error",
-      title: "Card checkout failed",
-      description: String(e?.message || e),
-    });
-    setBusy(false);
   }
-}
-
 
   async function handleCryptoCheckout() {
     try {
       setBusy(true);
-      const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/checkout/create-crypto-intent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
-      });
+      const r = await fetch(
+        `${API_BASE.replace(/\/$/, "")}/api/checkout/create-crypto-intent`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
+        }
+      );
       if (!r.ok) throw new Error(`Failed (${r.status})`);
       const { hostedUrl, chargeId } = await r.json();
 
@@ -153,13 +150,17 @@ export default function CheckoutModal({
 
         <div className="flex gap-2 border-b border-neutral-800 p-3">
           <button
-            className={`rounded-full border px-3 py-1 text-sm ${method === "card" ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"}`}
+            className={`rounded-full border px-3 py-1 text-sm ${
+              method === "card" ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"
+            }`}
             onClick={() => setMethod("card")}
           >
             Card / Apple Pay
           </button>
           <button
-            className={`rounded-full border px-3 py-1 text-sm ${method === "crypto" ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"}`}
+            className={`rounded-full border px-3 py-1 text-sm ${
+              method === "crypto" ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"
+            }`}
             onClick={() => setMethod("crypto")}
           >
             Crypto
