@@ -27,28 +27,53 @@ const sb =
     ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
     : null;
 
-// ---- CORS (allow localhost & prod frontends) ------------------------------
-const allowlist = [
+// ---- CORS (localhost & your prod front-ends) ------------------------------
+// We allow explicit known origins and common *.vercel.app / *.onrender.com.
+const allowlist = new Set([
   'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:4173',
+  'http://127.0.0.1:4173',
+  'https://taedal-v3.vercel.app',
+  'https://taedal-v3.onrender.com',
+]);
+
+const originRegexes = [
   /\.vercel\.app$/i,
-  /^https?:\/\/.*onrender\.com$/i,
-  /^https?:\/\/.*\.yourdomain\.com$/i, // <- optional: replace with your domain if you have one
+  /\.onrender\.com$/i,
 ];
 
-app.use(
-  cors({
-    origin(origin, cb) {
-      if (!origin) return cb(null, true);
-      const ok = allowlist.some((rule) =>
-        typeof rule === 'string' ? rule === origin : rule.test(origin)
-      );
-      if (ok) return cb(null, true);
-      console.warn('[CORS] blocked origin:', origin);
-      return cb(null, false);
-    },
-    credentials: false,
-  })
-);
+const corsOpts = {
+  origin(origin, cb) {
+    // Allow requests without an Origin (curl, server-to-server, health checks)
+    if (!origin) return cb(null, true);
+    if (allowlist.has(origin) || originRegexes.some(rx => rx.test(origin))) {
+      return cb(null, true);
+    }
+    console.warn('[CORS] blocked origin:', origin);
+    // Return false -> no CORS headers. If you prefer to hard-fail, pass an Error.
+    return cb(null, false);
+  },
+  credentials: false,
+  optionsSuccessStatus: 204,
+};
+
+// Apply CORS to all routes and handle preflight everywhere
+app.use(cors(corsOpts));
+app.options('*', cors(corsOpts));
+
+// Safety net: ensure headers are present even when a route returns early
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin || allowlist.has(origin) || originRegexes.some(rx => rx.test(origin))) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 
 // Lightweight request log
 app.use((req, _res, next) => {
@@ -56,19 +81,109 @@ app.use((req, _res, next) => {
   next();
 });
 
-// JSON (note: webhook route uses raw body; see checkout.cjs)
+// NOTE: If you add a Stripe webhook later, that route must use raw body.
+// For all other routes, JSON is fine:
 app.use(express.json());
 
 // ---- Healthcheck ----------------------------------------------------------
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
-// ---- Stripe/Crypto checkout routes ---------------------------------------
+// ---- Stripe / Crypto checkout --------------------------------------------
 const checkoutRouter = require(path.join(__dirname, 'checkout.cjs'));
 app.use('/api/checkout', checkoutRouter);
 
-// ---- Market routes (list/buy/offer/cancel) -------------------------------
-const marketRouter = require(path.join(__dirname, 'routes', 'market.cjs'));
-app.use('/api/market', marketRouter);
+// ---- Optional: market routes (list/buy/offer/cancel) ----------------------
+// Keep this if you created server/routes/market.cjs. Safe to keep mounted.
+try {
+  const marketRouter = require(path.join(__dirname, 'routes', 'market.cjs'));
+  app.use('/api/market', marketRouter);
+} catch (e) {
+  // no-op if the file doesn't exist
+}
+
+// ---- Legacy Listings mini-API (compat with current frontend) --------------
+// Your front-end still posts to /api/listings/create when there is no explicit
+// listing yet. Keep these until you fully migrate to /api/market/*.
+app.post('/api/listings/create', express.json(), async (req, res) => {
+  try {
+    const { artwork_id, lister, price, currency = 'ETH' } = req.body || {};
+    if (!artwork_id || !lister || !price) return res.status(400).json({ error: 'Missing fields' });
+    if (!sb) return res.status(500).json({ error: 'Supabase not configured' });
+
+    const { data, error } = await sb
+      .from('listings')
+      .insert({ artwork_id, lister, price, currency, status: 'active' })
+      .select('*').single();
+    if (error) throw error;
+
+    await sb.from('activity').insert({
+      artwork_id,
+      kind: 'list',
+      actor: lister,
+      note: `Listed for ${price} ${currency}`,
+      price_eth: currency === 'ETH' || currency === 'WETH' ? price : null,
+    });
+
+    res.json({ ok: true, listing: data });
+  } catch (e) {
+    console.error('[listings/create]', e);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+app.post('/api/listings/cancel', express.json(), async (req, res) => {
+  try {
+    const { listing_id, actor } = req.body || {};
+    if (!listing_id || !actor) return res.status(400).json({ error: 'Missing fields' });
+    if (!sb) return res.status(500).json({ error: 'Supabase not configured' });
+
+    const { data: lst, error: e0 } = await sb.from('listings')
+      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+      .eq('id', listing_id)
+      .select('*').single();
+    if (e0) throw e0;
+
+    await sb.from('activity').insert({
+      artwork_id: lst.artwork_id,
+      kind: 'cancel_list',
+      actor,
+      note: 'Listing cancelled',
+    });
+
+    res.json({ ok: true, listing: lst });
+  } catch (e) {
+    console.error('[listings/cancel]', e);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+app.post('/api/listings/fill', express.json(), async (req, res) => {
+  try {
+    const { listing_id, buyer, tx_hash } = req.body || {};
+    if (!listing_id || !buyer) return res.status(400).json({ error: 'Missing fields' });
+    if (!sb) return res.status(500).json({ error: 'Supabase not configured' });
+
+    const { data: lst, error: e1 } = await sb.from('listings')
+      .update({ status: 'filled', updated_at: new Date().toISOString() })
+      .eq('id', listing_id)
+      .select('*').single();
+    if (e1) throw e1;
+
+    await sb.from('activity').insert({
+      artwork_id: lst.artwork_id,
+      kind: 'buy',
+      actor: buyer,
+      tx_hash,
+      note: `Bought for ${lst.price} ${lst.currency}`,
+      price_eth: lst.currency === 'ETH' || lst.currency === 'WETH' ? lst.price : null,
+    });
+
+    res.json({ ok: true, listing: lst });
+  } catch (e) {
+    console.error('[listings/fill]', e);
+    res.status(500).json({ error: 'failed' });
+  }
+});
 
 // ---- Pinata: pinFile ------------------------------------------------------
 app.post('/api/pinata/pin-file', upload.single('file'), async (req, res) => {
@@ -168,6 +283,7 @@ app.post('/api/hashes', upload.single('file'), async (req, res) => {
     const buf = req.file.buffer;
     const mime = req.file.mimetype || '';
 
+    // sha256 is always available and cheap
     const sha = sha256Hex(buf);
 
     let dhash = null;
