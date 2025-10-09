@@ -6,7 +6,6 @@ import { ipfsToHttp } from "../lib/ipfs-url";
 import { DEFAULT_COVER_URL } from "../lib/config";
 import MakeOfferModal from "../components/MakeOfferModal";
 import CheckoutModal from "../components/CheckoutModal";
-import { API_BASE } from "../lib/config";
 
 type Attribute = { trait_type: string; value: string | number };
 type Metadata = {
@@ -38,8 +37,8 @@ type Artwork = {
 
 type Listing = {
   artwork_id: string;
-  listing_id?: string;
-  id?: string;
+  listing_id?: string; // from v_active_listing
+  id?: string;         // fallback from listings table
   lister: string | null;
   status: "active" | "cancelled" | "filled";
   price: string | null;
@@ -52,7 +51,7 @@ type TraitStat = {
   value: string;
   count: number;
   total: number;
-  freq: number;
+  freq: number; // 0..1
 };
 
 type Act = {
@@ -106,6 +105,7 @@ export default function ArtworkDetail() {
   const [showCheckout, setShowCheckout] = useState(false);
   const [showOffer, setShowOffer] = useState(false);
 
+  // 1) Load artwork
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -127,6 +127,7 @@ export default function ArtworkDetail() {
     return () => { mounted = false; };
   }, [id]);
 
+  // 2) Load metadata JSON
   useEffect(() => {
     let aborted = false;
     (async () => {
@@ -144,6 +145,7 @@ export default function ArtworkDetail() {
     return () => { aborted = true; };
   }, [art?.metadata_url]);
 
+  // 3) Activity
   async function fetchActivity(artworkId: string) {
     const { data } = await supabase
       .from("activity")
@@ -154,6 +156,7 @@ export default function ArtworkDetail() {
   }
   useEffect(() => { if (art?.id) fetchActivity(art.id); }, [art?.id]);
 
+  // 4) Rarity stats
   useEffect(() => {
     (async () => {
       let { data, error } = await supabase.from("trait_stats").select("*");
@@ -165,6 +168,7 @@ export default function ArtworkDetail() {
     })();
   }, []);
 
+  // 5) Active listing
   async function fetchListing(artworkId: string) {
     const viaView = await supabase
       .from("v_active_listing")
@@ -185,6 +189,7 @@ export default function ArtworkDetail() {
   }
   useEffect(() => { if (id) fetchListing(id); }, [id]);
 
+  // 5b) Best offer
   useEffect(() => {
     if (!id) return;
     (async () => {
@@ -198,11 +203,13 @@ export default function ArtworkDetail() {
     })();
   }, [id]);
 
+  // Refetch after writes
   async function refetchAll() {
     if (!id) return;
     await Promise.all([fetchListing(id), fetchActivity(id)]);
   }
 
+  // 6) Media + rarity map
   const media = useMemo(() => {
     const poster = art?.cover_url || DEFAULT_COVER_URL;
     if (art?.media_kind === "video") {
@@ -223,6 +230,7 @@ export default function ArtworkDetail() {
     return m;
   }, [traitStats]);
 
+  // Early returns
   if (loading) return <Skeleton />;
   if (err) return <div className="p-6 text-red-400">Error: {err}</div>;
   if (!art) return <div className="p-6 text-neutral-400">Artwork not found.</div>;
@@ -232,37 +240,20 @@ export default function ArtworkDetail() {
   const royaltyPct = ((art.royalty_bps || 0) / 100).toFixed(2);
   const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
 
+  // Prefer off-chain listing price first
   const listingId = listing?.listing_id || listing?.id || null;
   const currentPrice = listing?.price ?? art.sale_price ?? "";
   const currentCurrency = (listing?.currency || art.sale_currency || "ETH") as "ETH" | "WETH" | "USD";
-  const displayPrice = currentPrice ? `${currentPrice} {currentCurrency}` : null; // (kept simple)
+  const displayPrice = currentPrice ? `${currentPrice} ${currentCurrency}` : null; // fixed interpolation
 
+  // Can buy if there's an active listing or a fixed on-chain price
   const canBuy =
     Boolean(listingId && currentPrice) ||
     Boolean(!listingId && art.sale_kind === "fixed" && art.sale_price);
 
-  async function handleBuyClick() {
-    try {
-      if (listingId) { setShowCheckout(true); return; }
-      const body = {
-        artwork_id: art.id,
-        lister: art.owner,
-        price: art.sale_price,
-        currency: art.sale_currency || "ETH",
-      };
-      const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/listings/create`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) throw new Error(`Create listing failed (${r.status})`);
-      const j = await r.json();
-      const created = j?.listing as Listing | undefined;
-      if (created) setListing(created);
-      setShowCheckout(true);
-    } catch (e) {
-      console.error(e);
-    }
+  function handleBuyClick() {
+    // Just open checkout; don't call old /api/listings/create
+    setShowCheckout(true);
   }
 
   return (
@@ -359,6 +350,7 @@ export default function ArtworkDetail() {
                 </>
               )}
 
+              {/* Chain details */}
               <div className="mt-6">
                 <div className="mb-1 text-sm font-medium text-neutral-200">Blockchain details</div>
                 <div className="grid grid-cols-2 gap-2 text-xs text-neutral-400">
@@ -408,7 +400,7 @@ export default function ArtworkDetail() {
         </div>
       </div>
 
-      {/* Traits */}
+      {/* Traits with rarity pills */}
       <div className="mt-8">
         <div className="mb-2 text-lg font-semibold">Traits</div>
         {attributes.length ? (
@@ -416,7 +408,7 @@ export default function ArtworkDetail() {
             {attributes.map((t, i) => {
               const key = `${t.trait_type}::${String(t.value)}`;
               const s = rarityMap.get(key);
-              const pct = s ? Math.round((s.freq || 0) * 1000) / 10 : null;
+              const pct = s ? Math.round((s.freq || 0) * 1000) / 10 : null; // e.g., 12.3%
               return (
                 <li key={i} className="rounded-xl border border-neutral-800 p-3">
                   <div className="flex items-center justify-between">
@@ -451,7 +443,7 @@ export default function ArtworkDetail() {
           onClose={() => setShowCheckout(false)}
           onPurchased={refetchAll}
           artworkId={art.id}
-          listingId={listingId || ""}
+          listingId={listingId || "offchain"}  // safe fallback
           title={title}
           price={String(currentPrice)}
           currency={currentCurrency}
