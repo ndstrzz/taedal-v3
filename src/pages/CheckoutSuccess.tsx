@@ -1,19 +1,23 @@
-// src/pages/CheckoutSuccess.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect } from "react";
+import { useSearchParams, Link } from "react-router-dom";
 
 export default function CheckoutSuccess() {
-  const [sid, setSid] = useState<string | null>(null);
+  const [sp] = useSearchParams();
+  const sid = sp.get("sid");
 
   useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    setSid(p.get("sid"));
-  }, []);
+    // Optional: call your API to verify session or mark order paid
+    // For now we just show a message.
+    console.log("Stripe session:", sid);
+  }, [sid]);
 
   return (
-    <div className="mx-auto max-w-2xl p-6">
-      <h1 className="text-2xl font-semibold text-neutral-100">Payment successful</h1>
-      <p className="mt-2 text-neutral-300">Thanks! Your payment was processed.</p>
-      {sid && <div className="mt-3 text-xs text-neutral-500">Session: {sid}</div>}
+    <div className="p-8">
+      <h1 className="text-2xl font-semibold mb-2">Payment successful</h1>
+      <p className="text-neutral-400 mb-4">Thanks! Your payment was processed.</p>
+      <Link to="/" className="inline-block rounded-xl border border-neutral-700 px-4 py-2 hover:bg-neutral-900">
+        Back home
+      </Link>
     </div>
   );
 }
