@@ -55,20 +55,38 @@ export default function CheckoutModal({
       }
       setBusy(true);
 
-      const r = await fetch(
-        `${API_BASE.replace(/\/$/, "")}/api/checkout/create-stripe-session`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
-        }
-      );
-      if (!r.ok) throw new Error(`Failed (${r.status})`);
-      const { sessionId } = await r.json();
+      // DEMO OPTION: force USD (so server accepts it).
+      // Comment this block out if you add a real conversion on the server.
+      const payload = {
+        artworkId,
+        listingId,
+        title,
+        price, // EXPECTED AS USD for the demo card flow
+        currency: "USD" as const,
+        imageUrl,
+      };
 
-      // Keep this `any` cast to dodge the Stripe server-vs-browser type collision
+      const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/checkout/create-stripe-session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      // If the server returns an error body, surface it
+      let msg = `Failed (${r.status})`;
+      if (!r.ok) {
+        try {
+          const j = await r.json();
+          if (j?.error) msg = String(j.error);
+        } catch {}
+        throw new Error(msg);
+      }
+
+      const { sessionId } = await r.json();
       const stripe = await loadStripe(STRIPE_PK);
       if (!stripe) throw new Error("Stripe failed to load");
+
+      // Keep your previous fix to dodge TS overlap with server 'stripe' type
       const { error } = await (stripe as any).redirectToCheckout({ sessionId });
       if (error) throw error;
     } catch (e: any) {
@@ -84,14 +102,11 @@ export default function CheckoutModal({
   async function handleCryptoCheckout() {
     try {
       setBusy(true);
-      const r = await fetch(
-        `${API_BASE.replace(/\/$/, "")}/api/checkout/create-crypto-intent`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
-        }
-      );
+      const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/checkout/create-crypto-intent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
+      });
       if (!r.ok) throw new Error(`Failed (${r.status})`);
       const { hostedUrl, chargeId } = await r.json();
 
@@ -151,17 +166,13 @@ export default function CheckoutModal({
 
         <div className="flex gap-2 border-b border-neutral-800 p-3">
           <button
-            className={`rounded-full border px-3 py-1 text-sm ${
-              method === "card" ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"
-            }`}
+            className={`rounded-full border px-3 py-1 text-sm ${method === "card" ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"}`}
             onClick={() => setMethod("card")}
           >
             Card / Apple Pay
           </button>
           <button
-            className={`rounded-full border px-3 py-1 text-sm ${
-              method === "crypto" ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"
-            }`}
+            className={`rounded-full border px-3 py-1 text-sm ${method === "crypto" ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"}`}
             onClick={() => setMethod("crypto")}
           >
             Crypto
