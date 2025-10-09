@@ -3,10 +3,10 @@ const express = require("express");
 const router = express.Router();
 const { createClient } = require("@supabase/supabase-js");
 
-// service client (writes w/ RLS policies that check actor via columns)
+// service client
 const sbAdmin = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-// user client from the incoming access token (so we know who is acting)
+// user client from incoming token
 function userClient(req) {
   const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY, {
@@ -16,16 +16,13 @@ function userClient(req) {
 
 async function insertActivity({ artwork_id, kind, actor, price, currency, tx_hash, note }) {
   await sbAdmin.from("activity").insert({
-    artwork_id, kind, actor, tx_hash, note,
+    artwork_id, kind, actor, tx_hash, note: note || null,
     price_eth: price ?? null,
     counterparty: null,
   });
 }
 
-/**
- * POST /api/market/list
- * body: { artwork_id, price, currency }   currency: 'ETH' | 'WETH'
- */
+// POST /api/market/list
 router.post("/list", async (req, res) => {
   try {
     const { artwork_id, price, currency } = req.body || {};
@@ -36,7 +33,6 @@ router.post("/list", async (req, res) => {
     if (uerr || !user?.user) return res.status(401).json({ error: "Unauthorized" });
     const actor = user.user.id;
 
-    // create listing row
     const { data, error } = await sbAdmin.from("listings").insert({
       artwork_id,
       lister: actor,
@@ -53,11 +49,7 @@ router.post("/list", async (req, res) => {
   }
 });
 
-/**
- * POST /api/market/buy
- * body: { listing_id, tx_hash? }   (off-chain; tx_hash optional)
- * - marks listing filled and writes activity
- */
+// POST /api/market/buy
 router.post("/buy", async (req, res) => {
   try {
     const { listing_id, tx_hash } = req.body || {};
@@ -68,16 +60,13 @@ router.post("/buy", async (req, res) => {
     if (uerr || !user?.user) return res.status(401).json({ error: "Unauthorized" });
     const buyer = user.user.id;
 
-    // fetch listing
     const { data: lst, error: lerr } = await sbAdmin.from("listings").select("*").eq("id", listing_id).single();
     if (lerr || !lst) return res.status(404).json({ error: "Listing not found" });
     if (lst.status !== "active") return res.status(400).json({ error: "Listing not active" });
 
-    // fill listing
     const { error: uperr } = await sbAdmin.from("listings").update({ status: "filled" }).eq("id", listing_id);
     if (uperr) throw uperr;
 
-    // write activity
     await insertActivity({
       artwork_id: lst.artwork_id,
       kind: "buy",
@@ -94,10 +83,7 @@ router.post("/buy", async (req, res) => {
   }
 });
 
-/**
- * POST /api/market/cancel-listing
- * body: { listing_id }
- */
+// POST /api/market/cancel-listing
 router.post("/cancel-listing", async (req, res) => {
   try {
     const { listing_id } = req.body || {};
@@ -128,10 +114,7 @@ router.post("/cancel-listing", async (req, res) => {
   }
 });
 
-/**
- * POST /api/market/offer
- * body: { artwork_id, price, currency }
- */
+// POST /api/market/offer
 router.post("/offer", async (req, res) => {
   try {
     const { artwork_id, price, currency } = req.body || {};
@@ -157,10 +140,7 @@ router.post("/offer", async (req, res) => {
   }
 });
 
-/**
- * POST /api/market/cancel-offer
- * body: { offer_id }
- */
+// POST /api/market/cancel-offer
 router.post("/cancel-offer", async (req, res) => {
   try {
     const { offer_id } = req.body || {};

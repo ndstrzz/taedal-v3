@@ -66,7 +66,7 @@ export default function CheckoutModal({
       if (!r.ok) throw new Error(`Failed (${r.status})`);
       const { sessionId } = await r.json();
 
-      // Cast to any to avoid the TS collision with server "stripe" types
+      // Keep this `any` cast to dodge the Stripe server-vs-browser type collision
       const stripe = await loadStripe(STRIPE_PK);
       if (!stripe) throw new Error("Stripe failed to load");
       const { error } = await (stripe as any).redirectToCheckout({ sessionId });

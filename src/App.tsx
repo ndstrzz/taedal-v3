@@ -1,3 +1,4 @@
+// src/App.tsx
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
@@ -7,6 +8,8 @@ import SettingsProfile from "./pages/SettingsProfile";
 import PublicProfile from "./routes/PublicProfile";
 import MyProfile from "./pages/MyProfile";
 import ArtworkDetail from "./pages/ArtworkDetail";
+import CheckoutSuccess from "./pages/CheckoutSuccess";
+import CheckoutCancel from "./pages/CheckoutCancel";
 import NavBar from "./components/NavBar";
 import { useAuth } from "./state/AuthContext";
 
@@ -85,6 +88,11 @@ export default function App() {
         <Route path="/a/:id" element={<ArtworkDetail />} />
         <Route path="/@:handle" element={<PublicProfile />} />
         <Route path="/u/:username" element={<PublicProfile />} />
+
+        {/* Stripe return pages */}
+        <Route path="/checkout/success" element={<CheckoutSuccess />} />
+        <Route path="/checkout/cancel" element={<CheckoutCancel />} />
+
         <Route path="*" element={<NotFound />} />
       </Routes>
     </>

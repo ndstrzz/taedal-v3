@@ -1,3 +1,4 @@
+// server/index.cjs
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
@@ -16,7 +17,6 @@ const upload = multer({
 });
 
 // ---- Config ---------------------------------------------------------------
-
 const PORT = Number(process.env.PORT || 5000);
 const PINATA_JWT = process.env.PINATA_JWT || '';
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
@@ -27,11 +27,12 @@ const sb =
     ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
     : null;
 
-// ---- CORS (allow localhost & *.vercel.app & render) ----------------------
+// ---- CORS (allow localhost & prod frontends) ------------------------------
 const allowlist = [
   'http://localhost:5173',
   /\.vercel\.app$/i,
   /^https?:\/\/.*onrender\.com$/i,
+  /^https?:\/\/.*\.yourdomain\.com$/i, // <- optional: replace with your domain if you have one
 ];
 
 app.use(
@@ -55,18 +56,21 @@ app.use((req, _res, next) => {
   next();
 });
 
+// JSON (note: webhook route uses raw body; see checkout.cjs)
 app.use(express.json());
 
 // ---- Healthcheck ----------------------------------------------------------
-
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
-// ---- Stripe/Crypto checkout routes (mounted here) ------------------------
+// ---- Stripe/Crypto checkout routes ---------------------------------------
 const checkoutRouter = require(path.join(__dirname, 'checkout.cjs'));
 app.use('/api/checkout', checkoutRouter);
 
-// ---- Pinata: pinFile ------------------------------------------------------
+// ---- Market routes (list/buy/offer/cancel) -------------------------------
+const marketRouter = require(path.join(__dirname, 'routes', 'market.cjs'));
+app.use('/api/market', marketRouter);
 
+// ---- Pinata: pinFile ------------------------------------------------------
 app.post('/api/pinata/pin-file', upload.single('file'), async (req, res) => {
   try {
     if (!PINATA_JWT) return res.status(500).json({ error: 'Server misconfigured: PINATA_JWT missing' });
@@ -104,7 +108,6 @@ app.post('/api/pinata/pin-file', upload.single('file'), async (req, res) => {
 });
 
 // ---- Pinata: pin metadata JSON -------------------------------------------
-
 app.post('/api/metadata', async (req, res) => {
   try {
     if (!PINATA_JWT) {
@@ -154,7 +157,7 @@ app.post('/api/metadata', async (req, res) => {
   }
 });
 
-// ---- Similarity / Hashing -------------------------------------------------
+// ---- Hashes ---------------------------------------------------------------
 app.post('/api/hashes', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
@@ -264,190 +267,7 @@ app.post('/api/verify', upload.any(), async (req, res) => {
   }
 });
 
-// ---- Off-chain listing / activity endpoints -------------------------------
-
-app.post('/api/activity/list', express.json(), async (req, res) => {
-  try {
-    const { artwork_id, actor, price, currency='ETH' } = req.body || {};
-    if (!artwork_id || !actor) return res.status(400).json({ error: 'artwork_id & actor required' });
-
-    if (!sb) return res.status(500).json({ error: 'Supabase not configured' });
-
-    const { error: upErr } = await sb.from('artworks').update({
-      sale_kind: 'fixed',
-      sale_currency: currency,
-      sale_price: price
-    }).eq('id', artwork_id);
-    if (upErr) throw upErr;
-
-    const { error: actErr } = await sb.from('activity').insert({
-      artwork_id, actor, kind: 'list', data: { price, currency }
-    });
-    if (actErr) throw actErr;
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('[list] error', e);
-    res.status(500).json({ error: 'list failed', details: e.message });
-  }
-});
-
-app.post('/api/activity/unlist', express.json(), async (req, res) => {
-  try {
-    const { artwork_id, actor } = req.body || {};
-    if (!artwork_id || !actor) return res.status(400).json({ error: 'artwork_id & actor required' });
-
-    const { error: upErr } = await sb.from('artworks').update({
-      sale_kind: null,
-      sale_price: null
-    }).eq('id', artwork_id);
-    if (upErr) throw upErr;
-
-    const { error: actErr } = await sb.from('activity').insert({
-      artwork_id, actor, kind: 'unlist'
-    });
-    if (actErr) throw actErr;
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('[unlist] error', e);
-    res.status(500).json({ error: 'unlist failed', details: e.message });
-  }
-});
-
-app.post('/api/activity/offer', express.json(), async (req, res) => {
-  try {
-    const { artwork_id, actor, price, currency='ETH' } = req.body || {};
-    if (!artwork_id || !actor || !price) return res.status(400).json({ error: 'artwork_id, actor, price required' });
-
-    const { error: actErr } = await sb.from('activity').insert({
-      artwork_id, actor, kind: 'offer', data: { price, currency }
-    });
-    if (actErr) throw actErr;
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('[offer] error', e);
-    res.status(500).json({ error: 'offer failed', details: e.message });
-  }
-});
-
-app.post('/api/activity/sale', express.json(), async (req, res) => {
-  try {
-    const { artwork_id, actor, price, currency='ETH', tx_hash } = req.body || {};
-    if (!artwork_id || !actor || !price) return res.status(400).json({ error: 'artwork_id, actor, price required' });
-
-    // Clear listing on artwork
-    const { error: upErr } = await sb.from('artworks').update({
-      sale_kind: null,
-      sale_price: null
-    }).eq('id', artwork_id);
-    if (upErr) throw upErr;
-
-    const { error: actErr } = await sb.from('activity').insert({
-      artwork_id, actor, kind: 'sale', tx_hash, data: { price, currency }
-    });
-    if (actErr) throw actErr;
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('[sale] error', e);
-    res.status(500).json({ error: 'sale failed', details: e.message });
-  }
-});
-
-app.post('/api/admin/refresh-traits', async (_req, res) => {
-  try {
-    if (!sb) return res.status(500).json({ error: 'Supabase not configured' });
-    const { error } = await sb.rpc('refresh_trait_stats_mat');
-    if (error) throw error;
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('[refresh-traits] error', e);
-    res.status(500).json({ error: 'refresh failed', details: e.message });
-  }
-});
-
-// Listings mini-API ---------------------------------------------------------
-
-app.post('/api/listings/create', express.json(), async (req, res) => {
-  try {
-    const { artwork_id, lister, price, currency = 'ETH' } = req.body || {};
-    if (!artwork_id || !lister || !price) return res.status(400).json({ error: 'Missing fields' });
-
-    const { data, error } = await sb
-      .from('listings')
-      .insert({ artwork_id, lister, price, currency })
-      .select('*').single();
-    if (error) throw error;
-
-    await sb.from('activity').insert({
-      artwork_id,
-      kind: 'list',
-      actor: lister,
-      note: `Listed for ${price} ${currency}`
-    });
-
-    res.json({ ok: true, listing: data });
-  } catch (e) {
-    console.error('[listings/create]', e);
-    res.status(500).json({ error: 'failed' });
-  }
-});
-
-app.post('/api/listings/cancel', express.json(), async (req, res) => {
-  try {
-    const { listing_id, actor } = req.body || {};
-    if (!listing_id || !actor) return res.status(400).json({ error: 'Missing fields' });
-
-    const { data: lst, error: e0 } = await sb.from('listings')
-      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
-      .eq('id', listing_id)
-      .select('*').single();
-    if (e0) throw e0;
-
-    await sb.from('activity').insert({
-      artwork_id: lst.artwork_id,
-      kind: 'cancel_list',
-      actor,
-      note: 'Listing cancelled'
-    });
-
-    res.json({ ok: true, listing: lst });
-  } catch (e) {
-    console.error('[listings/cancel]', e);
-    res.status(500).json({ error: 'failed' });
-  }
-});
-
-app.post('/api/listings/fill', express.json(), async (req, res) => {
-  try {
-    const { listing_id, buyer, tx_hash } = req.body || {};
-    if (!listing_id || !buyer) return res.status(400).json({ error: 'Missing fields' });
-
-    const { data: lst, error: e1 } = await sb.from('listings')
-      .update({ status: 'filled', updated_at: new Date().toISOString() })
-      .eq('id', listing_id)
-      .select('*').single();
-    if (e1) throw e1;
-
-    await sb.from('activity').insert({
-      artwork_id: lst.artwork_id,
-      kind: 'buy',
-      actor: buyer,
-      tx_hash,
-      note: `Bought for ${lst.price} ${lst.currency}`
-    });
-
-    res.json({ ok: true, listing: lst });
-  } catch (e) {
-    console.error('[listings/fill]', e);
-    res.status(500).json({ error: 'failed' });
-  }
-});
-
 // ---- Start ----------------------------------------------------------------
-
 app.listen(PORT, () => {
   console.log(`API server listening on http://localhost:${PORT}`);
 });
