@@ -30,30 +30,18 @@ const sb =
     : null;
 
 // ------------------------------------------------------------------
-// CORS (allow localhost + vercel + render). Also respond to preflight.
+// CORS (permissive + preflight with Authorization allowed)
 // ------------------------------------------------------------------
-const allowlist = [
-  "http://localhost:5173",
-  /\.vercel\.app$/i,
-  /^https?:\/\/.*onrender\.com$/i,
-];
-
 const corsCfg = {
-  origin(origin, cb) {
-    if (!origin) return cb(null, true);
-    const ok = allowlist.some((rule) =>
-      typeof rule === "string" ? rule === origin : rule.test(origin)
-    );
-    if (ok) return cb(null, true);
-    console.warn("[CORS] blocked origin:", origin);
-    return cb(null, false);
-  },
+  origin: (_origin, cb) => cb(null, true), // allow all origins (simplest + reliable)
   credentials: false,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+  allowedHeaders: ["Content-Type", "Authorization", "Accept"],
   optionsSuccessStatus: 204,
 };
 
 app.use(cors(corsCfg));
-app.options("*", cors(corsCfg)); // make sure OPTIONS has ACAO headers
+app.options("*", cors(corsCfg)); // ensure every preflight gets ACAO
 
 // tiny request log
 app.use((req, _res, next) => {
@@ -61,7 +49,15 @@ app.use((req, _res, next) => {
   next();
 });
 
-// JSON body (webhooks would use raw; not needed here)
+// ------------------------------------------------------------------
+// Stripe webhook must receive RAW body (before express.json())
+// ------------------------------------------------------------------
+const { router: checkoutRouter, webhook: checkoutWebhook } = require(path.join(__dirname, "checkout.cjs"));
+app.post("/api/checkout/webhook", express.raw({ type: "application/json" }), checkoutWebhook);
+
+// ------------------------------------------------------------------
+// Then enable JSON for the rest of the API
+// ------------------------------------------------------------------
 app.use(express.json());
 
 // ------------------------------------------------------------------
@@ -72,7 +68,6 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 // ------------------------------------------------------------------
 // Stripe/Crypto + Market routes
 // ------------------------------------------------------------------
-const checkoutRouter = require(path.join(__dirname, "checkout.cjs"));
 app.use("/api/checkout", checkoutRouter);
 
 try {
@@ -203,86 +198,94 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
   }
 });
 
-// ------------------------------------------------------------------
-// Verify (soft-timeout)
-// ------------------------------------------------------------------
-app.post("/api/verify", upload.any(), async (req, res) => {
-  const TIME_LIMIT = 12_000;
-  let responded = false;
-  const softTimer = setTimeout(() => {
-    if (!responded && !res.headersSent) {
-      responded = true;
-      return res.json({ query: null, similar: [], matches: [] });
-    }
-  }, TIME_LIMIT);
-
+// --- Mini Listings API (off-chain) -----------------------------------------
+app.post('/api/listings/create', express.json(), async (req, res) => {
   try {
-    const pick =
-      (req.files || []).find((x) => x.fieldname === "artwork") ||
-      (req.files || []).find((x) => x.fieldname === "file");
+    const { artwork_id, lister, price, currency = 'ETH' } = req.body || {};
+    if (!artwork_id || !lister || !price) return res.status(400).json({ error: 'Missing fields' });
 
-    if (!pick) {
-      console.warn("[verify] no file");
-      if (!responded) {
-        responded = true;
-        return res.json({ query: null, similar: [], matches: [] });
-      }
-      return;
-    }
-
-    const qHash = await dhash64(pick.buffer);
-
-    if (!sb) {
-      if (!responded) {
-        responded = true;
-        return res.json({ query: qHash, similar: [], matches: [] });
-      }
-      return;
-    }
+    if (!sb) return res.status(500).json({ error: 'Supabase not configured' });
 
     const { data, error } = await sb
-      .from("artworks")
-      .select("id,title,owner,cover_url,dhash64")
-      .eq("status", "published")
-      .not("dhash64", "is", null)
-      .order("created_at", { ascending: false })
-      .limit(500);
+      .from('listings')
+      .insert({ artwork_id, lister, price, currency, status: 'active' })
+      .select('*')
+      .single();
     if (error) throw error;
 
-    const SIM_THRESHOLD = 0.86;
-    const results = (data || [])
-      .map((r) => {
-        if (!r.dhash64) return null;
-        const dist = hammingHex(qHash, r.dhash64);
-        const score = 1 - dist / 64;
-        return {
-          id: r.id,
-          title: r.title || "Untitled",
-          username: "",
-          user_id: r.owner,
-          image_url: r.cover_url,
-          score,
-        };
-      })
-      .filter(Boolean)
-      .filter((r) => r.score >= SIM_THRESHOLD)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 12);
+    await sb.from('activity').insert({
+      artwork_id,
+      kind: 'list',
+      actor: lister,
+      note: `Listed for ${price} ${currency}`
+    });
 
-    if (!responded) {
-      responded = true;
-      return res.json({ query: qHash, similar: results, matches: results });
-    }
+    res.json({ ok: true, listing: data });
   } catch (e) {
-    console.error("[verify] error", e);
-    if (!responded) {
-      responded = true;
-      return res.json({ query: null, similar: [], matches: [] });
-    }
-  } finally {
-    clearTimeout(softTimer);
+    console.error('[listings/create]', e);
+    res.status(500).json({ error: 'failed' });
   }
 });
+
+app.post('/api/listings/cancel', express.json(), async (req, res) => {
+  try {
+    const { listing_id, actor } = req.body || {};
+    if (!listing_id || !actor) return res.status(400).json({ error: 'Missing fields' });
+
+    if (!sb) return res.status(500).json({ error: 'Supabase not configured' });
+
+    const { data: lst, error: e0 } = await sb
+      .from('listings')
+      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+      .eq('id', listing_id)
+      .select('*')
+      .single();
+    if (e0) throw e0;
+
+    await sb.from('activity').insert({
+      artwork_id: lst.artwork_id,
+      kind: 'cancel_list',
+      actor,
+      note: 'Listing cancelled'
+    });
+
+    res.json({ ok: true, listing: lst });
+  } catch (e) {
+    console.error('[listings/cancel]', e);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
+app.post('/api/listings/fill', express.json(), async (req, res) => {
+  try {
+    const { listing_id, buyer, tx_hash } = req.body || {};
+    if (!listing_id || !buyer) return res.status(400).json({ error: 'Missing fields' });
+
+    if (!sb) return res.status(500).json({ error: 'Supabase not configured' });
+
+    const { data: lst, error: e1 } = await sb
+      .from('listings')
+      .update({ status: 'filled', updated_at: new Date().toISOString() })
+      .eq('id', listing_id)
+      .select('*')
+      .single();
+    if (e1) throw e1;
+
+    await sb.from('activity').insert({
+      artwork_id: lst.artwork_id,
+      kind: 'buy',
+      actor: buyer,
+      tx_hash,
+      note: `Bought for ${lst.price} ${lst.currency}`
+    });
+
+    res.json({ ok: true, listing: lst });
+  } catch (e) {
+    console.error('[listings/fill]', e);
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
 
 // ------------------------------------------------------------------
 app.listen(PORT, () => {
