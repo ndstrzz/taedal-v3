@@ -1,55 +1,40 @@
 // server/checkout.cjs
 const express = require("express");
 const router = express.Router();
+
 const Stripe = require("stripe");
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
+const stripe = STRIPE_SECRET_KEY
+  ? new Stripe(STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" })
+  : null;
 
-// Required env
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const APP_URL = (process.env.APP_URL || "http://localhost:5173").replace(/\/$/, "");
-
-// Optional: static conversion rate for demo/testing (e.g., 3200 = $3,200 per ETH)
-const ETH_USD_RATE = Number(process.env.ETH_USD_RATE || "0");
-
-// Init Stripe if key exists
-const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" }) : null;
-
-/**
- * Normalize the incoming { price, currency } to a USD amount (in cents) for Stripe.
- * - If currency is 'USD': just use the given price.
- * - If currency is 'ETH' or 'WETH': multiply by ETH_USD_RATE (must be set).
- */
-function toUsdCents({ price, currency }) {
-  const p = Number(price);
-  if (!Number.isFinite(p) || p <= 0) throw new Error("Invalid price number");
-
-  const cur = String(currency || "").toUpperCase();
-  if (cur === "USD") {
-    return Math.round(p * 100);
-  }
-
-  if (cur === "ETH" || cur === "WETH") {
-    if (!ETH_USD_RATE || !Number.isFinite(ETH_USD_RATE) || ETH_USD_RATE <= 0) {
-      throw new Error("Server missing ETH_USD_RATE to convert crypto → USD");
-    }
-    return Math.round(p * ETH_USD_RATE * 100);
-  }
-
-  throw new Error(`Unsupported currency: ${currency}`);
-}
 
 /**
  * POST /api/checkout/create-stripe-session
  * body: { artworkId, listingId, title, price, currency, imageUrl }
+ * Note: This demo endpoint expects USD. If you send ETH/WETH, we return 400.
  */
 router.post("/create-stripe-session", async (req, res) => {
   try {
-    if (!stripe) return res.status(500).json({ error: "Stripe not configured on server" });
+    if (!stripe) {
+      console.error("[stripe] missing STRIPE_SECRET_KEY");
+      return res.status(500).json({ error: "Stripe not configured on server" });
+    }
 
     const { artworkId, listingId, title, price, currency, imageUrl } = req.body || {};
-    if (!price || !currency) return res.status(400).json({ error: "Missing price or currency" });
+    const isUSD = String(currency || "").toUpperCase() === "USD";
 
-    // Convert incoming price to USD cents for Stripe
-    const unit_amount = toUsdCents({ price, currency });
+    if (!isUSD) {
+      console.warn("[stripe] non-USD currency received:", currency);
+      return res.status(400).json({ error: "This demo requires currency: 'USD'." });
+    }
+
+    const unitAmount = Math.round(Number(price) * 100);
+    if (!Number.isFinite(unitAmount) || unitAmount <= 0) {
+      console.warn("[stripe] invalid amount:", price);
+      return res.status(400).json({ error: "Invalid USD amount" });
+    }
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -60,29 +45,28 @@ router.post("/create-stripe-session", async (req, res) => {
           quantity: 1,
           price_data: {
             currency: "usd",
-            unit_amount,
+            unit_amount: unitAmount,
             product_data: {
               name: title || "Artwork",
               images: imageUrl ? [imageUrl] : undefined,
-              metadata: { artworkId, listingId, origin_currency: currency, origin_price: String(price) },
+              metadata: { artworkId, listingId },
             },
           },
         },
       ],
-      metadata: { artworkId, listingId, origin_currency: currency, origin_price: String(price) },
+      metadata: { artworkId, listingId },
     });
 
     res.json({ sessionId: session.id });
   } catch (e) {
-    console.error("[create-stripe-session] error:", e);
-    res.status(400).json({ error: e?.message || "Failed to create Stripe session" });
+    console.error("[stripe] create session error:", e?.message || e);
+    res.status(500).json({ error: "Failed to create Stripe session" });
   }
 });
 
 /**
  * POST /api/checkout/create-crypto-intent
- * body: { artworkId, listingId, title, price, currency, imageUrl }
- * Placeholder – replace with Coinbase Commerce or your own flow.
+ * For now, returns a placeholder hosted page URL.
  */
 router.post("/create-crypto-intent", async (req, res) => {
   try {
@@ -92,7 +76,7 @@ router.post("/create-crypto-intent", async (req, res) => {
     )}&listing=${encodeURIComponent(listingId || "")}`;
     res.json({ hostedUrl, chargeId: "demo_charge_id" });
   } catch (e) {
-    console.error(e);
+    console.error("[crypto] create intent error:", e?.message || e);
     res.status(500).json({ error: "Failed to create crypto intent" });
   }
 });
