@@ -44,60 +44,47 @@ export default function CheckoutModal({
   if (!open) return null;
 
   async function handleCardCheckout() {
-    try {
-      if (!STRIPE_PK) {
-        toast({
-          variant: "error",
-          title: "Stripe not configured",
-          description: "Set VITE_STRIPE_PUBKEY in your frontend env.",
-        });
-        return;
-      }
-      setBusy(true);
+  try {
+    setBusy(true);
 
-      // DEMO OPTION: force USD (so server accepts it).
-      // Comment this block out if you add a real conversion on the server.
-      const payload = {
-        artworkId,
-        listingId,
-        title,
-        price, // EXPECTED AS USD for the demo card flow
-        currency: "USD" as const,
-        imageUrl,
-      };
-
-      const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/checkout/create-stripe-session`, {
+    const r = await fetch(
+      `${API_BASE.replace(/\/$/, "")}/api/checkout/create-stripe-session`,
+      {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      // If the server returns an error body, surface it
-      let msg = `Failed (${r.status})`;
-      if (!r.ok) {
-        try {
-          const j = await r.json();
-          if (j?.error) msg = String(j.error);
-        } catch {}
-        throw new Error(msg);
+        body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
       }
+    );
+    if (!r.ok) throw new Error(`Failed (${r.status})`);
+    const { url, sessionId } = await r.json();
 
-      const { sessionId } = await r.json();
-      const stripe = await loadStripe(STRIPE_PK);
-      if (!stripe) throw new Error("Stripe failed to load");
-
-      // Keep your previous fix to dodge TS overlap with server 'stripe' type
-      const { error } = await (stripe as any).redirectToCheckout({ sessionId });
-      if (error) throw error;
-    } catch (e: any) {
-      toast({
-        variant: "error",
-        title: "Card checkout failed",
-        description: String(e?.message || e),
-      });
-      setBusy(false);
+    // Preferred: simple redirect using the server-provided URL (no Stripe.js needed)
+    if (url) {
+      window.location.href = url;
+      return;
     }
+
+    // Optional fallback: Stripe.js redirect if `url` wasn’t returned
+    const STRIPE_PK = import.meta.env.VITE_STRIPE_PUBKEY as string | undefined;
+    if (!STRIPE_PK || !sessionId) {
+      throw new Error("No checkout URL or session available");
+    }
+
+    const stripe = await loadStripe(STRIPE_PK);
+    if (!stripe) throw new Error("Stripe failed to load");
+    // Cast to any to dodge TS type collisions in your workspace
+    const { error } = await (stripe as any).redirectToCheckout({ sessionId });
+    if (error) throw error;
+  } catch (e: any) {
+    toast({
+      variant: "error",
+      title: "Card checkout failed",
+      description: String(e?.message || e),
+    });
+    setBusy(false);
   }
+}
+
 
   async function handleCryptoCheckout() {
     try {

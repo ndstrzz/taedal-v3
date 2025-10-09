@@ -1,3 +1,4 @@
+// client/src/components/BuyNowModal.tsx
 import React, { useState } from "react";
 import { useAuth } from "../state/AuthContext";
 
@@ -53,7 +54,9 @@ export default function BuyNowModal({
         <div className="space-y-4 p-4">
           <div className="rounded-xl border border-neutral-800 p-3">
             <div className="text-sm text-neutral-400">Item</div>
-            <div className="mt-1 text-neutral-200">{defaultPrice} {defaultCurrency}</div>
+            <div className="mt-1 text-neutral-200">
+              {defaultPrice} {defaultCurrency}
+            </div>
           </div>
 
           <div className="rounded-xl border border-neutral-800 p-3">
@@ -69,7 +72,8 @@ export default function BuyNowModal({
               </label>
             </div>
             <p className="mt-2 text-xs text-neutral-500">
-              This is an off-chain purchase marker. You can paste a chain tx hash (optional) if you actually transferred funds.
+              This is an off-chain purchase marker. You can paste a chain tx hash (optional) if you actually transferred
+              funds.
             </p>
           </div>
 
@@ -85,7 +89,11 @@ export default function BuyNowModal({
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-neutral-800 p-4">
-          <button onClick={onClose} className="rounded-xl border border-neutral-700 px-4 py-2 text-sm" disabled={busy}>
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-neutral-700 px-4 py-2 text-sm"
+            disabled={busy}
+          >
             Cancel
           </button>
           <button
