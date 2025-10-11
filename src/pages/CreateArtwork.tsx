@@ -19,11 +19,9 @@ type SimilarRecord = {
 
 const ACCEPT = "image/png,image/jpeg,image/webp,video/mp4";
 const MAX_MB = 25;
-
-function fmtMB(bytes: number) { return (bytes / (1024 * 1024)).toFixed(1) + "MB"; }
+const fmtMB = (b: number) => (b / (1024 * 1024)).toFixed(1) + "MB";
 
 type Step = "media" | "details" | "rights" | "sale" | "preview";
-type Currency = "ETH" | "USD";
 
 export default function CreateArtwork() {
   const { user } = useAuth();
@@ -32,20 +30,19 @@ export default function CreateArtwork() {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Core state
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string>("");
 
-  // poster/video specific
+  // poster/video
   const isVideo = file ? file.type.startsWith("video/") : false;
   const [posterBlob, setPosterBlob] = useState<Blob | null>(null);
   const [posterUrl, setPosterUrl] = useState<string>("");
 
-  // details / metadata
+  // details
   const [title, setTitle] = useState<string>("");
   const [description, setDescription] = useState<string>("");
   const [attributes, setAttributes] = useState<Attribute[]>([]);
-  const [royaltyBps, setRoyaltyBps] = useState<number>(500); // default 5%
+  const [royaltyBps, setRoyaltyBps] = useState<number>(500);
 
   // rights
   const [ackRights, setAckRights] = useState<boolean>(false);
@@ -53,8 +50,8 @@ export default function CreateArtwork() {
 
   // sale
   const [saleKind, setSaleKind] = useState<"fixed" | "auction" | null>("fixed");
+  const [saleCurrency, setSaleCurrency] = useState<"ETH" | "USD">("ETH");
   const [salePrice, setSalePrice] = useState<string>("");
-  const [saleCurrency, setSaleCurrency] = useState<Currency>("ETH"); // ← NEW
   const [auctionReserve, setAuctionReserve] = useState<string>("");
   const [auctionStart, setAuctionStart] = useState<string>("");
   const [auctionEnd, setAuctionEnd] = useState<string>("");
@@ -81,8 +78,8 @@ export default function CreateArtwork() {
   const [pendingDHash, setPendingDHash] = useState<string>("");
   const [pendingSha256, setPendingSha256] = useState<string>("");
 
-  // wizard
   const [step, setStep] = useState<Step>("media");
+
   const canNext =
     step === "media"    ? !!file && (!isVideo || !!posterBlob)
   : step === "details"  ? !!title.trim()
@@ -91,7 +88,6 @@ export default function CreateArtwork() {
   : step === "preview"  ? true
   : false;
 
-  // preview blob URL
   useEffect(() => {
     if (!file) { setPreviewUrl(""); return; }
     const url = URL.createObjectURL(file);
@@ -99,7 +95,6 @@ export default function CreateArtwork() {
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
-  // poster preview URL
   useEffect(() => {
     if (!posterBlob) { setPosterUrl(""); return; }
     const url = URL.createObjectURL(posterBlob);
@@ -107,7 +102,6 @@ export default function CreateArtwork() {
     return () => URL.revokeObjectURL(url);
   }, [posterBlob]);
 
-  // intake & validation
   const handleNewFile = useCallback((f: File) => {
     if (!ACCEPT.split(",").includes(f.type)) {
       toast({ variant: "error", title: "Unsupported file type", description: f.type });
@@ -129,7 +123,6 @@ export default function CreateArtwork() {
     e.currentTarget.value = "";
   }, [handleNewFile]);
 
-  // similarity check
   useEffect(() => {
     if (!file || !API_BASE) return;
     (async () => {
@@ -138,18 +131,14 @@ export default function CreateArtwork() {
         const fd = new FormData();
         fd.append("file", file);
         const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/verify`, { method: "POST", body: fd, headers: { Accept: "application/json" }});
-        const out = await r.json();
+        const out = await r.json().catch(() => ({}));
         const results = Array.isArray(out?.similar) ? out.similar : out?.matches || [];
         setCandidates(results);
-      } catch {
-        setCandidates([]);
-      } finally {
-        setChecking(false);
-      }
+      } catch { setCandidates([]); }
+      finally { setChecking(false); }
     })();
   }, [file]);
 
-  // poster from video
   const makePoster = useCallback(async () => {
     if (!file || !isVideo) return;
     try {
@@ -169,7 +158,6 @@ export default function CreateArtwork() {
 
     setBusy(true); setProgress(0);
     try {
-      // 1) pin primary media (image or video)
       let last = 0;
       const pinPrimary = await pinFileViaServerWithProgress(file, file.name, (r) => {
         const pct = Math.round(r * 100);
@@ -177,7 +165,6 @@ export default function CreateArtwork() {
       });
       const mediaCid = pinPrimary.cid;
 
-      // 2) poster (if video) — also pin
       let posterGateway = "";
       if (isVideo && posterBlob) {
         const posterOut = await pinFileViaServerWithProgress(
@@ -190,20 +177,17 @@ export default function CreateArtwork() {
         setPendingCoverUrl(pinPrimary.gatewayUrl || DEFAULT_COVER_URL);
       }
 
-      // set pending cids
       setPendingImageCid(isVideo ? "" : mediaCid);
       setPendingAnimationCid(isVideo ? mediaCid : "");
       setProgress(100);
       toast({ variant: "success", title: "Pinned media to IPFS" });
 
-      // 3) hashes
       let dh = "", sh = "";
       try {
         const fd1 = new FormData();
-        const blobForHash =
-          isVideo && posterBlob
-            ? new File([posterBlob], "poster.webp", { type: "image/webp" })
-            : file;
+        const blobForHash = isVideo && posterBlob
+          ? new File([posterBlob], "poster.webp", { type: "image/webp" })
+          : file;
         fd1.append("file", blobForHash);
         const r1 = await fetch(`${API_BASE.replace(/\/$/, "")}/api/hashes`, { method: "POST", body: fd1 });
         const j = await r1.json().catch(() => ({} as any));
@@ -213,18 +197,14 @@ export default function CreateArtwork() {
       setPendingDHash(dh);
       setPendingSha256(sh);
 
-      // 4) metadata
-      const body: any = {
+      const body = {
         name: title.trim(),
         description: description.trim(),
         attributes: attributes?.length ? attributes : undefined,
+        ...(isVideo
+          ? { image: posterGateway ? posterGateway.replace("https://gateway.pinata.cloud/ipfs/","ipfs://") : undefined, animationCid: mediaCid }
+          : { imageCid: mediaCid }),
       };
-      if (isVideo) {
-        body.image = posterGateway ? posterGateway.replace("https://gateway.pinata.cloud/ipfs/","ipfs://") : undefined;
-        body.animationCid = mediaCid;
-      } else {
-        body.imageCid = mediaCid;
-      }
 
       const r2 = await fetch(`${API_BASE.replace(/\/$/, "")}/api/metadata`, {
         method: "POST",
@@ -236,7 +216,6 @@ export default function CreateArtwork() {
       const metadataUri = metaOut?.metadata_url || metaOut?.ipfsUri || `ipfs://${metaOut?.metadata_cid}`;
       setPendingMetaUrl(metadataUri);
 
-      // 5) open mint modal
       setPendingArtworkNum(Math.floor(Date.now() / 1000));
       setMintErr(null);
       setMintOpen(true);
@@ -246,7 +225,6 @@ export default function CreateArtwork() {
     }
   }, [user, file, isVideo, posterBlob, title, description, attributes, toast]);
 
-  // Save draft (no mint)
   const onSaveDraft = useCallback(async () => {
     if (!user) { toast({ variant: "error", title: "Please log in" }); return; }
     try {
@@ -259,7 +237,7 @@ export default function CreateArtwork() {
         media_kind: isVideo ? "video" : "image",
         royalty_bps: royaltyBps,
         sale_kind: saleKind,
-        sale_currency: saleKind === "fixed" ? saleCurrency : null, // ← use selected currency
+        sale_currency: saleCurrency,
         sale_price: saleKind === "fixed" && salePrice ? salePrice : null,
         auction_reserve: saleKind === "auction" && auctionReserve ? auctionReserve : null,
         auction_starts_at: saleKind === "auction" && auctionStart ? new Date(auctionStart).toISOString() : null,
@@ -271,9 +249,8 @@ export default function CreateArtwork() {
     } catch (e: any) {
       toast({ variant: "error", title: "Failed to save draft", description: String(e?.message || e) });
     }
-  }, [user, title, description, posterUrl, isVideo, royaltyBps, saleKind, saleCurrency, salePrice, auctionReserve, auctionStart, auctionEnd, navigate, toast]);
+  }, [user, title, description, posterUrl, isVideo, royaltyBps, saleKind, salePrice, saleCurrency, auctionReserve, auctionStart, auctionEnd, navigate, toast]);
 
-  // Mint → then DB insert (published)
   async function handleMintWithMetaMask() {
     try {
       setMintBusy(true);
@@ -299,7 +276,7 @@ export default function CreateArtwork() {
           animation_cid: isVideo ? pendingAnimationCid : null,
           royalty_bps: royaltyBps,
           sale_kind: saleKind,
-          sale_currency: saleKind === "fixed" ? saleCurrency : null, // ← use selected currency
+          sale_currency: saleCurrency,
           sale_price: saleKind === "fixed" && salePrice ? salePrice : null,
           auction_reserve: saleKind === "auction" && auctionReserve ? auctionReserve : null,
           auction_starts_at: saleKind === "auction" && auctionStart ? new Date(auctionStart).toISOString() : null,
@@ -320,7 +297,7 @@ export default function CreateArtwork() {
     }
   }
 
-  // UI ----------------------------------------------------------------------
+  // UI
   return (
     <div className="mx-auto max-w-5xl p-6">
       <h1 className="mb-6 text-2xl font-semibold">Create artwork</h1>
@@ -341,11 +318,7 @@ export default function CreateArtwork() {
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-900">
             {previewUrl ? (
-              isVideo ? (
-                <video src={previewUrl} controls className="w-full" />
-              ) : (
-                <img src={previewUrl} alt="preview" className="w-full object-cover" />
-              )
+              isVideo ? <video src={previewUrl} controls className="w-full" /> : <img src={previewUrl} alt="preview" className="w-full object-cover" />
             ) : (
               <DropZone onSelect={handleNewFile} accept={ACCEPT} className="aspect-square grid place-items-center" ariaLabel="Upload artwork media">
                 <div className="mx-6 rounded-2xl border border-dashed border-neutral-700 p-8 text-center">
@@ -454,33 +427,28 @@ export default function CreateArtwork() {
 
           {saleKind==="fixed" && (
             <>
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-neutral-300">Currency:</span>
-                <button
-                  type="button"
-                  onClick={() => setSaleCurrency("ETH")}
-                  className={`rounded-full px-3 py-1 text-sm ring-1 ${
-                    saleCurrency === "ETH" ? "bg-white text-black ring-white/50" : "bg-neutral-900 ring-neutral-700"
-                  }`}
+              <label className="block max-w-xs">
+                <span className="mb-1 block text-sm text-neutral-300">Currency</span>
+                <select
+                  value={saleCurrency}
+                  onChange={(e)=>setSaleCurrency(e.target.value as "ETH" | "USD")}
+                  className="w-full rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2"
                 >
-                  ETH
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSaleCurrency("USD")}
-                  className={`rounded-full px-3 py-1 text-sm ring-1 ${
-                    saleCurrency === "USD" ? "bg-white text-black ring-white/50" : "bg-neutral-900 ring-neutral-700"
-                  }`}
-                >
-                  USD
-                </button>
-                <span className="text-xs text-neutral-500">{saleCurrency === "USD" ? "Processed via Stripe" : "On-chain (crypto)"}</span>
-              </div>
+                  <option value="ETH">ETH</option>
+                  <option value="USD">USD</option>
+                </select>
+              </label>
+
               <label className="block max-w-xs">
                 <span className="mb-1 block text-sm text-neutral-300">Price ({saleCurrency})</span>
-                <input type="number" min={0} step="0.0001" value={salePrice}
+                <input
+                  type="number"
+                  min={0}
+                  step="0.0001"
+                  value={salePrice}
                   onChange={(e)=>setSalePrice(e.target.value)}
-                  className="w-full rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2"/>
+                  className="w-full rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2"
+                />
               </label>
             </>
           )}
@@ -561,7 +529,6 @@ export default function CreateArtwork() {
               className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-60">Mint & publish</button>
           </div>
 
-          {/* Similarity results */}
           {candidates && (
             <div className="mt-6">
               <h2 className="mb-2 text-lg font-semibold">Possible matches</h2>
@@ -586,7 +553,6 @@ export default function CreateArtwork() {
         </div>
       )}
 
-      {/* Mint wallet modal */}
       <MintWalletModal
         open={mintOpen}
         busy={mintBusy}

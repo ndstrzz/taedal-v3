@@ -8,7 +8,7 @@ const axios = require("axios");
 const cors = require("cors");
 const FormData = require("form-data");
 const { createClient } = require("@supabase/supabase-js");
-const { dhash64, sha256Hex, hammingHex } = require("./utils/similarity.cjs");
+const { dhash64, sha256Hex } = require("./utils/similarity.cjs");
 
 const app = express();
 const upload = multer({
@@ -23,10 +23,18 @@ const PORT = Number(process.env.PORT || 5000);
 const PINATA_JWT = process.env.PINATA_JWT || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
+// Public client (rarely used here)
 const sb =
   SUPABASE_URL && SUPABASE_ANON_KEY
     ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    : null;
+
+// Admin client (bypasses RLS — use carefully)
+const sbAdmin =
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     : null;
 
 // ------------------------------------------------------------------
@@ -39,7 +47,6 @@ const corsCfg = {
   allowedHeaders: ["Content-Type", "Authorization", "Accept"],
   optionsSuccessStatus: 204,
 };
-
 app.use(cors(corsCfg));
 app.options("*", cors(corsCfg));
 
@@ -49,30 +56,21 @@ app.use((req, _res, next) => {
 });
 
 // ------------------------------------------------------------------
-// Stripe webhook must receive RAW body (before express.json())
+// Stripe routes (webhook needs raw body BEFORE json())
 // ------------------------------------------------------------------
-const checkoutMod = require(path.join(__dirname, "checkout.cjs"));
-const checkoutRouter = checkoutMod.router || checkoutMod; // support either export style
-const checkoutWebhook =
-  checkoutMod.webhook || ((_req, res) => res.sendStatus(200));
+const checkout = require(path.join(__dirname, "checkout.cjs"));
+app.post("/api/checkout/webhook", express.raw({ type: "application/json" }), checkout.webhook);
 
-app.post("/api/checkout/webhook", express.raw({ type: "application/json" }), checkoutWebhook);
-
-// ------------------------------------------------------------------
-// Then enable JSON for the rest of the API
-// ------------------------------------------------------------------
+// Enable JSON for normal routes
 app.use(express.json());
 
-// ------------------------------------------------------------------
 // Health
-// ------------------------------------------------------------------
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-// ------------------------------------------------------------------
-// Stripe/Crypto + Market routes
-// ------------------------------------------------------------------
-app.use("/api/checkout", checkoutRouter);
+// Stripe/Crypto API
+app.use("/api/checkout", checkout.router);
 
+// Mount market routes if present (optional; we still keep mini routes below)
 try {
   const marketRouter = require(path.join(__dirname, "routes", "market.cjs"));
   app.use("/api/market", marketRouter);
@@ -124,7 +122,6 @@ app.post("/api/metadata", async (req, res) => {
     if (!PINATA_JWT) return res.status(500).json({ error: "Server misconfigured: PINATA_JWT missing" });
 
     const p = req.body || {};
-
     const image =
       typeof p.image === "string" && p.image.trim()
         ? p.image.trim()
@@ -174,10 +171,7 @@ app.post("/api/metadata", async (req, res) => {
 // ------------------------------------------------------------------
 app.post("/api/hashes", upload.single("file"), async (req, res) => {
   try {
-    if (!req.file) {
-      console.warn("[hashes] no file field found");
-      return res.json({ dhash64: null, sha256: null, note: "no file" });
-    }
+    if (!req.file) return res.json({ dhash64: null, sha256: null, note: "no file" });
 
     const buf = req.file.buffer;
     const mime = req.file.mimetype || "";
@@ -185,107 +179,100 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
 
     let dhash = null;
     if (mime.startsWith("image/")) {
-      try {
-        dhash = await dhash64(buf);
-      } catch (e) {
-        console.warn("[hashes] dHash failed:", e?.message || e);
-      }
-    } else {
-      console.log("[hashes] skipped dHash (non-image):", mime);
+      try { dhash = await dhash64(buf); } catch (e) { console.warn("[hashes] dHash failed:", e?.message || e); }
     }
 
     res.json({ dhash64: dhash, sha256: sha });
   } catch (e) {
-    console.error("[hashes] unexpected error:", e);
+    console.error("[hashes] unexpected:", e);
     res.json({ dhash64: null, sha256: null, note: "unexpected error" });
   }
 });
 
-// --- Mini Listings API (off-chain) -----------------------------------------
-app.post('/api/listings/create', express.json(), async (req, res) => {
+// ------------------------------------------------------------------
+// Mini Listings API (now uses SERVICE ROLE)
+// ------------------------------------------------------------------
+app.post("/api/listings/create", async (req, res) => {
   try {
-    const { artwork_id, lister, price, currency = 'ETH' } = req.body || {};
-    if (!artwork_id || !lister || !price) return res.status(400).json({ error: 'Missing fields' });
+    const { artwork_id, lister, price, currency = "ETH" } = req.body || {};
+    if (!artwork_id || !lister || !price) return res.status(400).json({ error: "Missing fields" });
+    if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
 
-    if (!sb) return res.status(500).json({ error: 'Supabase not configured' });
-
-    const { data, error } = await sb
-      .from('listings')
-      .insert({ artwork_id, lister, price, currency, status: 'active' })
-      .select('*')
+    const { data, error } = await sbAdmin
+      .from("listings")
+      .insert({ artwork_id, lister, price, currency, status: "active" })
+      .select("*")
       .single();
     if (error) throw error;
 
-    await sb.from('activity').insert({
+    await sbAdmin.from("activity").insert({
       artwork_id,
-      kind: 'list',
+      kind: "list",
       actor: lister,
-      note: `Listed for ${price} ${currency}`
+      note: `Listed for ${price} ${currency}`,
     });
 
     res.json({ ok: true, listing: data });
   } catch (e) {
-    console.error('[listings/create]', e);
-    res.status(500).json({ error: 'failed' });
+    console.error("[listings/create]", e);
+    res.status(500).json({ error: e?.message || "failed" });
   }
 });
 
-app.post('/api/listings/cancel', express.json(), async (req, res) => {
+app.post("/api/listings/cancel", async (req, res) => {
   try {
     const { listing_id, actor } = req.body || {};
-    if (!listing_id || !actor) return res.status(400).json({ error: 'Missing fields' });
+    if (!listing_id || !actor) return res.status(400).json({ error: "Missing fields" });
+    if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
 
-    if (!sb) return res.status(500).json({ error: 'Supabase not configured' });
-
-    const { data: lst, error: e0 } = await sb
-      .from('listings')
-      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
-      .eq('id', listing_id)
-      .select('*')
+    const { data: lst, error: e0 } = await sbAdmin
+      .from("listings")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .eq("id", listing_id)
+      .select("*")
       .single();
     if (e0) throw e0;
 
-    await sb.from('activity').insert({
+    await sbAdmin.from("activity").insert({
       artwork_id: lst.artwork_id,
-      kind: 'cancel_list',
+      kind: "cancel_list",
       actor,
-      note: 'Listing cancelled'
+      note: "Listing cancelled",
     });
 
     res.json({ ok: true, listing: lst });
   } catch (e) {
-    console.error('[listings/cancel]', e);
-    res.status(500).json({ error: 'failed' });
+    console.error("[listings/cancel]", e);
+    res.status(500).json({ error: e?.message || "failed" });
   }
 });
 
-app.post('/api/listings/fill', express.json(), async (req, res) => {
+app.post("/api/listings/fill", async (req, res) => {
   try {
     const { listing_id, buyer, tx_hash } = req.body || {};
-    if (!listing_id || !buyer) return res.status(400).json({ error: 'Missing fields' });
+    if (!listing_id || !buyer) return res.status(400).json({ error: "Missing fields" });
+    if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
 
-    if (!sb) return res.status(500).json({ error: 'Supabase not configured' });
-
-    const { data: lst, error: e1 } = await sb
-      .from('listings')
-      .update({ status: 'filled', updated_at: new Date().toISOString() })
-      .eq('id', listing_id)
-      .select('*')
+    const { data: lst, error: e1 } = await sbAdmin
+      .from("listings")
+      .update({ status: "filled", updated_at: new Date().toISOString() })
+      .eq("id", listing_id)
+      .select("*")
       .single();
     if (e1) throw e1;
 
-    await sb.from('activity').insert({
+    await sbAdmin.from("activity").insert({
       artwork_id: lst.artwork_id,
-      kind: 'buy',
+      kind: "buy",
       actor: buyer,
       tx_hash,
-      note: `Bought for ${lst.price} ${lst.currency}`
+      note: `Bought for ${lst.price} ${lst.currency}`,
     });
 
     res.json({ ok: true, listing: lst });
   } catch (e) {
-    console.error('[listings/fill]', e);
-    res.status(500).json({ error: 'failed' });
+    console.error("[listings/fill]", e);
+    res.status(500).json({ error: e?.message || "failed" });
   }
 });
 
