@@ -1,8 +1,8 @@
 // src/pages/ArtworkDetail.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { ipfsToHttp } from "../lib/ipfs-url";
+import { ipfsCandidates, ipfsToHttp } from "../lib/ipfs-url";
 import { DEFAULT_COVER_URL } from "../lib/config";
 import MakeOfferModal from "../components/MakeOfferModal";
 import CheckoutModal from "../components/CheckoutModal";
@@ -32,7 +32,7 @@ type Artwork = {
   royalty_bps: number | null;
   sale_kind: "fixed" | "auction" | null;
   sale_price: string | null;
-  sale_currency: "ETH" | "WETH" | null;
+  sale_currency: "ETH" | "WETH" | "USD" | null;
   created_at: string;
 };
 
@@ -89,11 +89,16 @@ function Skeleton() {
   );
 }
 
-// price formatter (fixes `{currentCurrency}` bug and formats nicely)
-function formatPrice(
-  val: string | number,
-  currency: "ETH" | "WETH" | "USD"
-): string {
+/** IPFS gateway-rotation helper for <img>/<video>. */
+function useGatewaySrc(uri?: string | null) {
+  const candidates = useMemo(() => ipfsCandidates(uri), [uri]);
+  const [idx, setIdx] = useState(0);
+  const src = candidates[idx] || "";
+  const onError = () => setIdx((i) => (i + 1 < candidates.length ? i + 1 : i));
+  return { src, onError };
+}
+
+function formatPrice(val: string | number, currency: "ETH" | "WETH" | "USD") {
   if (currency === "USD") {
     const n = Number(val);
     return Number.isFinite(n)
@@ -122,18 +127,15 @@ export default function ArtworkDetail() {
   const [showCheckout, setShowCheckout] = useState(false);
   const [showOffer, setShowOffer] = useState(false);
 
+  // Load artwork
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         setLoading(true);
-        const { data, error } = await supabase
-          .from("artworks")
-          .select("*")
-          .eq("id", id)
-          .single();
+        const { data, error } = await supabase.from("artworks").select("*").eq("id", id).single();
         if (error) throw error;
-        if (mounted) setArt(data as unknown as Artwork);
+        if (mounted) setArt(data as Artwork);
       } catch (e: any) {
         setErr(e?.message || "Failed to load artwork");
       } finally {
@@ -145,19 +147,24 @@ export default function ArtworkDetail() {
     };
   }, [id]);
 
+  // Load metadata with fallback gateways
   useEffect(() => {
     let aborted = false;
     (async () => {
       if (!art?.metadata_url) return setMeta(null);
-      try {
-        const url = ipfsToHttp(art.metadata_url);
-        const r = await fetch(url, { cache: "no-store" });
-        if (!r.ok) throw new Error(`Metadata HTTP ${r.status}`);
-        const j = (await r.json()) as Metadata;
-        if (!aborted) setMeta(j || null);
-      } catch {
-        if (!aborted) setMeta(null);
+      const urls = ipfsCandidates(art.metadata_url);
+      for (const u of urls) {
+        try {
+          const r = await fetch(u, { cache: "no-store" });
+          if (!r.ok) continue;
+          const j = (await r.json()) as Metadata;
+          if (!aborted) setMeta(j || null);
+          return;
+        } catch {
+          /* try next */
+        }
       }
+      if (!aborted) setMeta(null);
     })();
     return () => {
       aborted = true;
@@ -194,7 +201,7 @@ export default function ArtworkDetail() {
       .eq("artwork_id", artworkId)
       .maybeSingle();
     if (viaView.data) {
-      setListing(viaView.data as unknown as Listing);
+      setListing(viaView.data as Listing);
       return;
     }
     const fallback = await supabase
@@ -205,7 +212,7 @@ export default function ArtworkDetail() {
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (fallback.data) setListing(fallback.data as unknown as Listing);
+    if (fallback.data) setListing(fallback.data as Listing);
     else setListing(null);
   }
   useEffect(() => {
@@ -215,12 +222,8 @@ export default function ArtworkDetail() {
   useEffect(() => {
     if (!id) return;
     (async () => {
-      const { data, error } = await supabase
-        .from("v_best_offer")
-        .select("*")
-        .eq("artwork_id", id)
-        .maybeSingle();
-      if (!error && data) setBestOffer(data as unknown as BestOffer);
+      const { data, error } = await supabase.from("v_best_offer").select("*").eq("artwork_id", id).maybeSingle();
+      if (!error && data) setBestOffer(data as BestOffer);
       else setBestOffer(null);
     })();
   }, [id]);
@@ -230,24 +233,19 @@ export default function ArtworkDetail() {
     await Promise.all([fetchListing(id), fetchActivity(id)]);
   }
 
+  // Compose media w/ gateway rotation
+  const img = useGatewaySrc(art?.image_cid ? `ipfs://${art.image_cid}` : meta?.image || undefined);
+  const vid = useGatewaySrc(
+    art?.animation_cid ? `ipfs://${art.animation_cid}` : meta?.animation_url || undefined
+  );
+
   const media = useMemo(() => {
     const poster = art?.cover_url || DEFAULT_COVER_URL;
     if (art?.media_kind === "video") {
-      if (art?.animation_cid)
-        return {
-          kind: "video" as const,
-          poster,
-          src: ipfsToHttp(`ipfs://${art.animation_cid}`),
-        };
-      if (meta?.animation_url)
-        return { kind: "video" as const, poster, src: ipfsToHttp(meta.animation_url) };
-      return { kind: "video" as const, poster, src: "" };
+      return { kind: "video" as const, src: vid.src, poster, onErr: vid.onError };
     }
-    if (art?.image_cid)
-      return { kind: "image" as const, poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) };
-    if (meta?.image) return { kind: "image" as const, poster, src: ipfsToHttp(meta.image) };
-    return { kind: "image" as const, poster, src: poster };
-  }, [art?.media_kind, art?.animation_cid, art?.image_cid, art?.cover_url, meta?.animation_url, meta?.image]);
+    return { kind: "image" as const, src: img.src || poster, poster, onErr: img.onError };
+  }, [art?.media_kind, art?.cover_url, img.src, vid.src]);
 
   const rarityMap = useMemo(() => {
     const m = new Map<string, TraitStat>();
@@ -267,8 +265,6 @@ export default function ArtworkDetail() {
   const listingId = listing?.listing_id || listing?.id || null;
   const currentPrice = listing?.price ?? art.sale_price ?? "";
   const currentCurrency = (listing?.currency || art.sale_currency || "ETH") as "ETH" | "WETH" | "USD";
-
-  // FIX: render the actual currency instead of the literal `{currentCurrency}`
   const displayPrice = currentPrice ? formatPrice(currentPrice, currentCurrency) : null;
 
   const canBuy =
@@ -281,6 +277,7 @@ export default function ArtworkDetail() {
         setShowCheckout(true);
         return;
       }
+      // create an off-chain listing if none exists yet
       const body = {
         artwork_id: art.id,
         lister: art.owner,
@@ -292,12 +289,16 @@ export default function ArtworkDetail() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!r.ok) throw new Error(`Create listing failed (${r.status})`);
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j?.error || `Create listing failed (${r.status})`);
+      }
       const j = await r.json();
       const created = j?.listing as Listing | undefined;
       if (created) setListing(created);
       setShowCheckout(true);
-    } catch (e) {
+    } catch (e: any) {
+      alert(e?.message || "Buy failed");
       console.error(e);
     }
   }
@@ -308,15 +309,22 @@ export default function ArtworkDetail() {
         {/* Media */}
         <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950">
           {media.kind === "video" ? (
-            <video src={media.src} poster={media.poster || undefined} className="h-full w-full" controls playsInline />
+            <video
+              src={media.src}
+              poster={media.poster || undefined}
+              className="h-full w-full"
+              onError={media.onErr}
+              controls
+              playsInline
+            />
           ) : (
             <img
               src={media.src || media.poster}
               alt={title}
               className="h-full w-full object-contain"
               onError={(e) => {
-                const el = e.currentTarget;
-                if (el.src !== media.poster) el.src = media.poster;
+                media.onErr();
+                if (e.currentTarget.src !== media.poster) e.currentTarget.src = media.poster; // final fallback
               }}
             />
           )}
@@ -327,13 +335,9 @@ export default function ArtworkDetail() {
           <div className="text-xl font-semibold text-neutral-100">{title}</div>
           <div className="mt-1 text-sm text-neutral-400">
             Owned by{" "}
-            {art.owner ? (
-              <Link to={`/u/${art.owner}`} className="text-neutral-200 hover:underline">
-                {art.owner.slice(0, 6)}…{art.owner.slice(-4)}
-              </Link>
-            ) : (
-              "unknown"
-            )}
+            <span className="text-neutral-200">
+              {art.owner ? `${art.owner.slice(0, 6)}…${art.owner.slice(-4)}` : "unknown"}
+            </span>
           </div>
 
           <div className="mt-4 rounded-2xl border border-neutral-800 p-4">
@@ -342,7 +346,10 @@ export default function ArtworkDetail() {
 
             {bestOffer ? (
               <div className="mt-2 text-sm text-neutral-400">
-                Best offer: <span className="text-neutral-200">{bestOffer.price} {bestOffer.currency}</span>
+                Best offer:{" "}
+                <span className="text-neutral-200">
+                  {bestOffer.price} {bestOffer.currency}
+                </span>
               </div>
             ) : null}
 
@@ -419,10 +426,17 @@ export default function ArtworkDetail() {
                 <div className="text-sm text-neutral-400">No activity yet.</div>
               ) : (
                 acts.map((a) => (
-                  <div key={a.id} className="flex items-center justify-between rounded-xl border border-neutral-800 p-3 text-sm">
+                  <div
+                    key={a.id}
+                    className="flex items-center justify-between rounded-xl border border-neutral-800 p-3 text-sm"
+                  >
                     <div className="flex items-center gap-2">
-                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize">{a.kind}</span>
-                      <span className="text-neutral-300">{a.actor ? `${a.actor.slice(0, 6)}…${a.actor.slice(-4)}` : "Someone"}</span>
+                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize">
+                        {a.kind}
+                      </span>
+                      <span className="text-neutral-300">
+                        {a.actor ? `${a.actor.slice(0, 6)}…${a.actor.slice(-4)}` : "Someone"}
+                      </span>
                     </div>
                     <div className="text-right">
                       {a.price_eth ? <div className="text-neutral-200">{a.price_eth} ETH</div> : null}
@@ -459,7 +473,9 @@ export default function ArtworkDetail() {
                       {pct !== null ? (
                         <>
                           <div className="text-xs text-neutral-400">{pct}%</div>
-                          <div className="text-[11px] text-neutral-500">{s?.count ?? 0} of {s?.total ?? 0}</div>
+                          <div className="text-[11px] text-neutral-500">
+                            {s?.count ?? 0} of {s?.total ?? 0}
+                          </div>
                         </>
                       ) : (
                         <div className="text-xs text-neutral-500">—</div>
@@ -486,7 +502,7 @@ export default function ArtworkDetail() {
           title={title}
           price={String(currentPrice)}
           currency={currentCurrency}
-          imageUrl={media.kind === "image" ? (media.src || media.poster) : media.poster}
+          imageUrl={media.kind === "image" ? media.src || media.poster : media.poster}
         />
       )}
       {showOffer && (

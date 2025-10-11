@@ -1,31 +1,37 @@
 // src/lib/ipfs-url.ts
-const GATEWAY = "https://ipfs.io/ipfs/"; // or your preferred public gateway
+/**
+ * Robust IPFS helpers with multi-gateway fallback.
+ */
 
-function isHttp(u: string) {
-  return /^https?:\/\//i.test(u);
-}
+const GATEWAYS = [
+  "https://cloudflare-ipfs.com/ipfs/",
+  "https://gateway.pinata.cloud/ipfs/",
+  "https://w3s.link/ipfs/",
+  "https://ipfs.io/ipfs/",
+];
 
-function stripIpfs(u: string) {
-  // ipfs://CID or ipfs://ipfs/CID
-  const m1 = u.match(/^ipfs:\/\/(?:(?:ipfs)\/)?([^/?#]+)(.*)$/i);
-  if (m1) return m1[1] + (m1[2] || "");
-  // /ipfs/CID
-  const m2 = u.match(/^\/?ipfs\/([^/?#]+)(.*)$/i);
-  if (m2) return m2[1] + (m2[2] || "");
-  // raw CID case – if it looks like a CID, pass through
-  if (/^[a-z0-9]{46,}|^baf[mk]/i.test(u)) return u;
-  return "";
-}
-
-/** Convert many IPFS-ish forms to a gateway URL. Passthrough for http(s). */
-export function ipfsToHttp(u: string | null | undefined): string {
+function normalizeToPath(u: string) {
   if (!u) return "";
-  const s = String(u).trim();
-  if (!s) return "";
-  if (isHttp(s)) return s;
+  const s = String(u);
+  if (s.startsWith("ipfs://")) return s.slice("ipfs://".length);
+  // convert https://<gw>/ipfs/<cidOrPath> → <cidOrPath>
+  return s.replace(/^https?:\/\/[^/]+\/ipfs\//i, "");
+}
 
-  const cidAndRest = stripIpfs(s);
-  if (cidAndRest) return GATEWAY + cidAndRest.replace(/^\/+/, "");
+export function ipfsCandidates(uri?: string | null) {
+  if (!uri) return [] as string[];
+  const path = normalizeToPath(uri);
+  if (!path) return [];
+  return GATEWAYS.map((gw) => gw + path);
+}
 
-  return s; // as a last resort, return unchanged
+/** For components that only accept a single URL (no fallback). */
+export function ipfsToHttp(uri?: string | null) {
+  const c = ipfsCandidates(uri);
+  return c[0] || "";
+}
+
+export function isIpfsLike(u?: string | null) {
+  if (!u) return false;
+  return /^ipfs:\/\//i.test(u) || /\/ipfs\/[a-z0-9]/i.test(u);
 }

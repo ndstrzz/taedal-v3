@@ -1,3 +1,4 @@
+// src/pages/CreateArtwork.tsx
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../state/AuthContext";
@@ -22,6 +23,7 @@ const MAX_MB = 25;
 function fmtMB(bytes: number) { return (bytes / (1024 * 1024)).toFixed(1) + "MB"; }
 
 type Step = "media" | "details" | "rights" | "sale" | "preview";
+type Currency = "ETH" | "USD";
 
 export default function CreateArtwork() {
   const { user } = useAuth();
@@ -52,6 +54,7 @@ export default function CreateArtwork() {
   // sale
   const [saleKind, setSaleKind] = useState<"fixed" | "auction" | null>("fixed");
   const [salePrice, setSalePrice] = useState<string>("");
+  const [saleCurrency, setSaleCurrency] = useState<Currency>("ETH"); // ← NEW
   const [auctionReserve, setAuctionReserve] = useState<string>("");
   const [auctionStart, setAuctionStart] = useState<string>("");
   const [auctionEnd, setAuctionEnd] = useState<string>("");
@@ -184,7 +187,6 @@ export default function CreateArtwork() {
         posterGateway = posterOut.gatewayUrl;
         setPendingCoverUrl(posterGateway || DEFAULT_COVER_URL);
       } else {
-        // for images, use pin gateway or default
         setPendingCoverUrl(pinPrimary.gatewayUrl || DEFAULT_COVER_URL);
       }
 
@@ -194,7 +196,7 @@ export default function CreateArtwork() {
       setProgress(100);
       toast({ variant: "success", title: "Pinned media to IPFS" });
 
-      // 3) hashes — use the poster for videos (server only dHashes images)
+      // 3) hashes
       let dh = "", sh = "";
       try {
         const fd1 = new FormData();
@@ -207,13 +209,11 @@ export default function CreateArtwork() {
         const j = await r1.json().catch(() => ({} as any));
         dh = j?.dhash64 || "";
         sh = j?.sha256 || "";
-      } catch {
-        /* soft-fail */
-      }
+      } catch { /* soft-fail */ }
       setPendingDHash(dh);
       setPendingSha256(sh);
 
-      // 4) metadata (image or poster; optional animation_url)
+      // 4) metadata
       const body: any = {
         name: title.trim(),
         description: description.trim(),
@@ -233,8 +233,7 @@ export default function CreateArtwork() {
       });
       if (!r2.ok) throw new Error(`Failed to pin metadata (${r2.status})`);
       const metaOut = await r2.json();
-      const metadataUri =
-        metaOut?.metadata_url || metaOut?.ipfsUri || `ipfs://${metaOut?.metadata_cid}`;
+      const metadataUri = metaOut?.metadata_url || metaOut?.ipfsUri || `ipfs://${metaOut?.metadata_cid}`;
       setPendingMetaUrl(metadataUri);
 
       // 5) open mint modal
@@ -260,7 +259,7 @@ export default function CreateArtwork() {
         media_kind: isVideo ? "video" : "image",
         royalty_bps: royaltyBps,
         sale_kind: saleKind,
-        sale_currency: "ETH",
+        sale_currency: saleKind === "fixed" ? saleCurrency : null, // ← use selected currency
         sale_price: saleKind === "fixed" && salePrice ? salePrice : null,
         auction_reserve: saleKind === "auction" && auctionReserve ? auctionReserve : null,
         auction_starts_at: saleKind === "auction" && auctionStart ? new Date(auctionStart).toISOString() : null,
@@ -272,7 +271,7 @@ export default function CreateArtwork() {
     } catch (e: any) {
       toast({ variant: "error", title: "Failed to save draft", description: String(e?.message || e) });
     }
-  }, [user, title, description, posterUrl, isVideo, royaltyBps, saleKind, salePrice, auctionReserve, auctionStart, auctionEnd, navigate, toast]);
+  }, [user, title, description, posterUrl, isVideo, royaltyBps, saleKind, saleCurrency, salePrice, auctionReserve, auctionStart, auctionEnd, navigate, toast]);
 
   // Mint → then DB insert (published)
   async function handleMintWithMetaMask() {
@@ -290,7 +289,7 @@ export default function CreateArtwork() {
           description: description.trim(),
           cover_url: pendingCoverUrl || DEFAULT_COVER_URL,
           status: "published",
-          image_cid: pendingImageCid || null,
+          image_cid: isVideo ? null : pendingImageCid || null,
           metadata_url: pendingMetaUrl,
           token_id: tokenId,
           tx_hash: txHash,
@@ -300,7 +299,7 @@ export default function CreateArtwork() {
           animation_cid: isVideo ? pendingAnimationCid : null,
           royalty_bps: royaltyBps,
           sale_kind: saleKind,
-          sale_currency: "ETH",
+          sale_currency: saleKind === "fixed" ? saleCurrency : null, // ← use selected currency
           sale_price: saleKind === "fixed" && salePrice ? salePrice : null,
           auction_reserve: saleKind === "auction" && auctionReserve ? auctionReserve : null,
           auction_starts_at: saleKind === "auction" && auctionStart ? new Date(auctionStart).toISOString() : null,
@@ -454,12 +453,36 @@ export default function CreateArtwork() {
           </div>
 
           {saleKind==="fixed" && (
-            <label className="block max-w-xs">
-              <span className="mb-1 block text-sm text-neutral-300">Price (ETH)</span>
-              <input type="number" min={0} step="0.0001" value={salePrice}
-                onChange={(e)=>setSalePrice(e.target.value)}
-                className="w-full rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2"/>
-            </label>
+            <>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-neutral-300">Currency:</span>
+                <button
+                  type="button"
+                  onClick={() => setSaleCurrency("ETH")}
+                  className={`rounded-full px-3 py-1 text-sm ring-1 ${
+                    saleCurrency === "ETH" ? "bg-white text-black ring-white/50" : "bg-neutral-900 ring-neutral-700"
+                  }`}
+                >
+                  ETH
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSaleCurrency("USD")}
+                  className={`rounded-full px-3 py-1 text-sm ring-1 ${
+                    saleCurrency === "USD" ? "bg-white text-black ring-white/50" : "bg-neutral-900 ring-neutral-700"
+                  }`}
+                >
+                  USD
+                </button>
+                <span className="text-xs text-neutral-500">{saleCurrency === "USD" ? "Processed via Stripe" : "On-chain (crypto)"}</span>
+              </div>
+              <label className="block max-w-xs">
+                <span className="mb-1 block text-sm text-neutral-300">Price ({saleCurrency})</span>
+                <input type="number" min={0} step="0.0001" value={salePrice}
+                  onChange={(e)=>setSalePrice(e.target.value)}
+                  className="w-full rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2"/>
+              </label>
+            </>
           )}
 
           {saleKind==="auction" && (
@@ -514,7 +537,9 @@ export default function CreateArtwork() {
                 </ul>
               </div> : null}
               <div className="mt-3 text-xs text-neutral-400">Royalty: {(royaltyBps/100).toFixed(2)}%</div>
-              <div className="text-xs text-neutral-400">Sale: {saleKind === "fixed" ? `Fixed • ${salePrice || 0} ETH` : "Auction"}</div>
+              <div className="text-xs text-neutral-400">
+                Sale: {saleKind === "fixed" ? `Fixed • ${salePrice || 0} ${saleCurrency}` : "Auction"}
+              </div>
             </div>
           </div>
 

@@ -45,27 +45,19 @@ export default function CheckoutModal({
 
   async function handleCardCheckout() {
     try {
+      if (!STRIPE_PK) throw new Error("Missing VITE_STRIPE_PUBKEY in frontend env");
       setBusy(true);
 
-      const r = await fetch(
-        `${API_BASE.replace(/\/$/, "")}/api/checkout/create-stripe-session`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
-        }
-      );
+      const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/checkout/create-stripe-session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
+      });
       if (!r.ok) throw new Error(`Failed (${r.status})`);
-      const { url, sessionId } = await r.json();
+      const { sessionId } = await r.json();
 
-      // Preferred: simple redirect URL from the server
-      if (url) {
-        window.location.href = url;
-        return;
-      }
+      if (!sessionId) throw new Error("No checkout session returned by server");
 
-      // Optional fallback to Stripe.js
-      if (!STRIPE_PK || !sessionId) throw new Error("No checkout session available");
       const stripe = await loadStripe(STRIPE_PK);
       if (!stripe) throw new Error("Stripe failed to load");
       const { error } = await (stripe as any).redirectToCheckout({ sessionId });
@@ -83,14 +75,11 @@ export default function CheckoutModal({
   async function handleCryptoCheckout() {
     try {
       setBusy(true);
-      const r = await fetch(
-        `${API_BASE.replace(/\/$/, "")}/api/checkout/create-crypto-intent`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
-        }
-      );
+      const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/checkout/create-crypto-intent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
+      });
       if (!r.ok) throw new Error(`Failed (${r.status})`);
       const { hostedUrl, chargeId } = await r.json();
 
