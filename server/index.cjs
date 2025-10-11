@@ -38,7 +38,7 @@ const sbAdmin =
     : null;
 
 // ------------------------------------------------------------------
-// CORS (permissive; allows Authorization header; handles preflight)
+// CORS (permissive)
 // ------------------------------------------------------------------
 const corsCfg = {
   origin: (_origin, cb) => cb(null, true),
@@ -71,13 +71,24 @@ app.use(express.json());
 // Health
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
+// Debug (no secrets) – helps verify envs are actually loaded on Render
+app.get("/api/_debug", (_req, res) => {
+  res.json({
+    ok: true,
+    supabase_url: !!SUPABASE_URL,
+    anon_key_len: SUPABASE_ANON_KEY ? SUPABASE_ANON_KEY.length : 0,
+    service_role_len: SUPABASE_SERVICE_ROLE_KEY ? SUPABASE_SERVICE_ROLE_KEY.length : 0,
+    pinata_jwt_len: PINATA_JWT ? PINATA_JWT.length : 0,
+  });
+});
+
 // Simple verify (avoid 404s during create flow)
 app.post("/api/verify", (_req, res) => res.json({ similar: [] }));
 
 // Stripe/Crypto API
 app.use("/api/checkout", checkout.router);
 
-// Try to mount market routes
+// Optional market routes
 try {
   const marketRouter = require(path.join(__dirname, "routes", "market.cjs"));
   app.use("/api/market", marketRouter);
@@ -91,9 +102,7 @@ try {
 app.post("/api/pinata/pin-file", upload.single("file"), async (req, res) => {
   try {
     if (!PINATA_JWT)
-      return res
-        .status(500)
-        .json({ error: "Server misconfigured: PINATA_JWT missing" });
+      return res.status(500).json({ error: "Server misconfigured: PINATA_JWT missing" });
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
     const form = new FormData();
@@ -102,34 +111,21 @@ app.post("/api/pinata/pin-file", upload.single("file"), async (req, res) => {
       contentType: req.file.mimetype,
     });
 
-    const name = (req.body?.name || req.file.originalname || "upload").slice(
-      0,
-      80
-    );
+    const name = (req.body?.name || req.file.originalname || "upload").slice(0, 80);
     form.append("pinataMetadata", JSON.stringify({ name }));
     form.append("pinataOptions", JSON.stringify({ cidVersion: 1 }));
 
     const { data } = await axios.post(
       "https://api.pinata.cloud/pinning/pinFileToIPFS",
       form,
-      {
-        headers: { Authorization: `Bearer ${PINATA_JWT}`, ...form.getHeaders() },
-        maxBodyLength: Infinity,
-      }
+      { headers: { Authorization: `Bearer ${PINATA_JWT}`, ...form.getHeaders() }, maxBodyLength: Infinity }
     );
 
     const cid = data.IpfsHash;
-    res.json({
-      cid,
-      ipfsUri: `ipfs://${cid}`,
-      gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}`,
-    });
+    res.json({ cid, ipfsUri: `ipfs://${cid}`, gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}` });
   } catch (err) {
     console.error("[pin-file] error", err?.response?.data || err.message);
-    res.status(500).json({
-      error: "Pinning failed",
-      details: err?.response?.data || err.message,
-    });
+    res.status(500).json({ error: "Pinning failed", details: err?.response?.data || err.message });
   }
 });
 
@@ -139,9 +135,7 @@ app.post("/api/pinata/pin-file", upload.single("file"), async (req, res) => {
 app.post("/api/metadata", async (req, res) => {
   try {
     if (!PINATA_JWT)
-      return res
-        .status(500)
-        .json({ error: "Server misconfigured: PINATA_JWT missing" });
+      return res.status(500).json({ error: "Server misconfigured: PINATA_JWT missing" });
 
     const p = req.body || {};
     const image =
@@ -184,10 +178,7 @@ app.post("/api/metadata", async (req, res) => {
     });
   } catch (err) {
     console.error("[metadata] error", err?.response?.data || err.message);
-    res.status(500).json({
-      error: "Pin JSON failed",
-      details: err?.response?.data || err.message,
-    });
+    res.status(500).json({ error: "Pin JSON failed", details: err?.response?.data || err.message });
   }
 });
 
@@ -196,8 +187,7 @@ app.post("/api/metadata", async (req, res) => {
 // ------------------------------------------------------------------
 app.post("/api/hashes", upload.single("file"), async (req, res) => {
   try {
-    if (!req.file)
-      return res.json({ dhash64: null, sha256: null, note: "no file" });
+    if (!req.file) return res.json({ dhash64: null, sha256: null, note: "no file" });
 
     const buf = req.file.buffer;
     const mime = req.file.mimetype || "";
@@ -205,11 +195,7 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
 
     let dhash = null;
     if (mime.startsWith("image/")) {
-      try {
-        dhash = await dhash64(buf);
-      } catch (e) {
-        console.warn("[hashes] dHash failed:", e?.message || e);
-      }
+      try { dhash = await dhash64(buf); } catch (e) { console.warn("[hashes] dHash failed:", e?.message || e); }
     }
 
     res.json({ dhash64: dhash, sha256: sha });
@@ -221,7 +207,6 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
 
 // ------------------------------------------------------------------
 // Listings API (robust + verbose errors)
-// Tries (lister, price); if undefined-column, retries (seller, price_eth).
 // ------------------------------------------------------------------
 app.post("/api/listings/create", async (req, res) => {
   const { artwork_id, lister, price, currency = "ETH" } = req.body || {};
@@ -251,7 +236,7 @@ app.post("/api/listings/create", async (req, res) => {
     if (error) {
       const msg = `${error.message || ""} ${error.details || ""}`.toLowerCase();
       const isColErr =
-        error.code === "42703" || // undefined_column
+        error.code === "42703" ||
         msg.includes('column "price" does not exist') ||
         msg.includes('column "lister" does not exist');
 
@@ -291,12 +276,8 @@ app.post("/api/listings/create", async (req, res) => {
 app.post("/api/listings/cancel", async (req, res) => {
   try {
     const { listing_id, actor } = req.body || {};
-    if (!listing_id || !actor)
-      return res.status(400).json({ error: "Missing fields" });
-    if (!sbAdmin)
-      return res
-        .status(500)
-        .json({ error: "Supabase (admin) not configured" });
+    if (!listing_id || !actor) return res.status(400).json({ error: "Missing fields" });
+    if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
 
     const { data: lst, error: e0 } = await sbAdmin
       .from("listings")
@@ -323,12 +304,8 @@ app.post("/api/listings/cancel", async (req, res) => {
 app.post("/api/listings/fill", async (req, res) => {
   try {
     const { listing_id, buyer, tx_hash } = req.body || {};
-    if (!listing_id || !buyer)
-      return res.status(400).json({ error: "Missing fields" });
-    if (!sbAdmin)
-      return res
-        .status(500)
-        .json({ error: "Supabase (admin) not configured" });
+    if (!listing_id || !buyer) return res.status(400).json({ error: "Missing fields" });
+    if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
 
     const { data: lst, error: e1 } = await sbAdmin
       .from("listings")
