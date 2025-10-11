@@ -5,7 +5,7 @@ require("dotenv").config({ path: path.join(__dirname, ".env") });
 const express = require("express");
 const multer = require("multer");
 const axios = require("axios");
-// const cors = require("cors"); // not used (we set headers manually)
+const cors = require("cors");
 const FormData = require("form-data");
 const { createClient } = require("@supabase/supabase-js");
 const { dhash64, sha256Hex } = require("./utils/similarity.cjs");
@@ -38,26 +38,18 @@ const sbAdmin =
     : null;
 
 // ------------------------------------------------------------------
-// CORS: set headers for EVERY request (incl. preflight), before routes
+// CORS (permissive; allows Authorization header; handles preflight)
 // ------------------------------------------------------------------
-app.use((req, res, next) => {
-  const origin = req.headers.origin || "*";
-  res.header("Access-Control-Allow-Origin", origin);
-  res.header("Vary", "Origin"); // proper caching with multiple origins
-  res.header("Access-Control-Allow-Credentials", "false");
-  res.header(
-    "Access-Control-Allow-Methods",
-    "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
-  );
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, Accept"
-  );
-  if (req.method === "OPTIONS") return res.sendStatus(204);
-  next();
-});
+const corsCfg = {
+  origin: (_origin, cb) => cb(null, true),
+  credentials: false,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+  allowedHeaders: ["Content-Type", "Authorization", "Accept"],
+  optionsSuccessStatus: 204,
+};
+app.use(cors(corsCfg));
+app.options("*", cors(corsCfg));
 
-// request log (after CORS so preflights are visible too)
 app.use((req, _res, next) => {
   console.log("[api]", req.method, req.path, "from", req.headers.origin || "no-origin");
   next();
@@ -134,12 +126,10 @@ app.post("/api/pinata/pin-file", upload.single("file"), async (req, res) => {
     });
   } catch (err) {
     console.error("[pin-file] error", err?.response?.data || err.message);
-    res
-      .status(500)
-      .json({
-        error: "Pinning failed",
-        details: err?.response?.data || err.message,
-      });
+    res.status(500).json({
+      error: "Pinning failed",
+      details: err?.response?.data || err.message,
+    });
   }
 });
 
@@ -194,12 +184,10 @@ app.post("/api/metadata", async (req, res) => {
     });
   } catch (err) {
     console.error("[metadata] error", err?.response?.data || err.message);
-    res
-      .status(500)
-      .json({
-        error: "Pin JSON failed",
-        details: err?.response?.data || err.message,
-      });
+    res.status(500).json({
+      error: "Pin JSON failed",
+      details: err?.response?.data || err.message,
+    });
   }
 });
 
@@ -232,55 +220,71 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
 });
 
 // ------------------------------------------------------------------
-// Listings API (robust to schema differences)
+// Listings API (robust + verbose errors)
+// Tries (lister, price); if undefined-column, retries (seller, price_eth).
 // ------------------------------------------------------------------
 app.post("/api/listings/create", async (req, res) => {
-  const body = req.body || {};
-  const { artwork_id, lister, price, currency = "ETH" } = body;
+  const { artwork_id, lister, price, currency = "ETH" } = req.body || {};
 
-  if (!sbAdmin)
+  if (!sbAdmin) {
     return res.status(500).json({ error: "Supabase (admin) not configured" });
-  if (!artwork_id || !price)
+  }
+  if (!artwork_id || !price) {
     return res.status(400).json({ error: "Missing artwork_id or price" });
+  }
 
-  async function attemptInsert(cols) {
-    return sbAdmin
+  const attemptInsert = (cols) =>
+    sbAdmin
       .from("listings")
       .insert({ ...cols, status: "active", currency })
       .select("*")
       .single();
-  }
 
   try {
-    // Attempt 1: columns 'lister' + 'price'
+    // Attempt A: lister + price
     let { data, error } = await attemptInsert({
       artwork_id,
       lister: lister || null,
       price,
     });
+
     if (error) {
       const msg = `${error.message || ""} ${error.details || ""}`.toLowerCase();
       const isColErr =
+        error.code === "42703" || // undefined_column
         msg.includes('column "price" does not exist') ||
-        msg.includes('column "lister" does not exist') ||
-        error.code === "42703";
+        msg.includes('column "lister" does not exist');
 
-      if (!isColErr) throw error;
+      if (!isColErr) {
+        return res.status(500).json({
+          error: "Insert failed (variant A)",
+          code: error.code,
+          details: error.details,
+          message: error.message,
+        });
+      }
 
-      // Attempt 2: columns 'seller' + 'price_eth'
-      const { data: data2, error: err2 } = await attemptInsert({
+      // Attempt B: seller + price_eth
+      const alt = await attemptInsert({
         artwork_id,
         seller: lister || null,
         price_eth: price,
       });
-      if (err2) throw err2;
-      data = data2;
+      if (alt.error) {
+        return res.status(500).json({
+          error: "Insert failed (variant B)",
+          code: alt.error.code,
+          details: alt.error.details,
+          message: alt.error.message,
+        });
+      }
+      data = alt.data;
     }
 
-    res.json({ ok: true, listing: data });
+    return res.json({ ok: true, listing: data });
   } catch (e) {
-    console.error("[listings/create] error:", e);
-    res.status(500).json({ error: e?.message || "failed" });
+    console.error("[listings/create] unexpected:", e);
+    return res.status(500).json({ error: String(e?.message || e) });
   }
 });
 
@@ -290,7 +294,9 @@ app.post("/api/listings/cancel", async (req, res) => {
     if (!listing_id || !actor)
       return res.status(400).json({ error: "Missing fields" });
     if (!sbAdmin)
-      return res.status(500).json({ error: "Supabase (admin) not configured" });
+      return res
+        .status(500)
+        .json({ error: "Supabase (admin) not configured" });
 
     const { data: lst, error: e0 } = await sbAdmin
       .from("listings")
@@ -320,7 +326,9 @@ app.post("/api/listings/fill", async (req, res) => {
     if (!listing_id || !buyer)
       return res.status(400).json({ error: "Missing fields" });
     if (!sbAdmin)
-      return res.status(500).json({ error: "Supabase (admin) not configured" });
+      return res
+        .status(500)
+        .json({ error: "Supabase (admin) not configured" });
 
     const { data: lst, error: e1 } = await sbAdmin
       .from("listings")
