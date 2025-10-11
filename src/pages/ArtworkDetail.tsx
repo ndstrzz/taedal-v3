@@ -89,6 +89,22 @@ function Skeleton() {
   );
 }
 
+// price formatter (fixes `{currentCurrency}` bug and formats nicely)
+function formatPrice(
+  val: string | number,
+  currency: "ETH" | "WETH" | "USD"
+): string {
+  if (currency === "USD") {
+    const n = Number(val);
+    return Number.isFinite(n)
+      ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n)
+      : `$${val}`;
+  }
+  const n = Number(val);
+  const trimmed = Number.isFinite(n) ? Number(n.toFixed(4)).toString() : String(val);
+  return `${trimmed} ${currency}`;
+}
+
 export default function ArtworkDetail() {
   const { id } = useParams<{ id: string }>();
 
@@ -124,7 +140,9 @@ export default function ArtworkDetail() {
         setLoading(false);
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [id]);
 
   useEffect(() => {
@@ -141,7 +159,9 @@ export default function ArtworkDetail() {
         if (!aborted) setMeta(null);
       }
     })();
-    return () => { aborted = true; };
+    return () => {
+      aborted = true;
+    };
   }, [art?.metadata_url]);
 
   async function fetchActivity(artworkId: string) {
@@ -152,7 +172,9 @@ export default function ArtworkDetail() {
       .order("created_at", { ascending: false });
     if (data) setActs(data as Act[]);
   }
-  useEffect(() => { if (art?.id) fetchActivity(art.id); }, [art?.id]);
+  useEffect(() => {
+    if (art?.id) fetchActivity(art.id);
+  }, [art?.id]);
 
   useEffect(() => {
     (async () => {
@@ -171,7 +193,10 @@ export default function ArtworkDetail() {
       .select("*")
       .eq("artwork_id", artworkId)
       .maybeSingle();
-    if (viaView.data) { setListing(viaView.data as unknown as Listing); return; }
+    if (viaView.data) {
+      setListing(viaView.data as unknown as Listing);
+      return;
+    }
     const fallback = await supabase
       .from("listings")
       .select("*")
@@ -183,7 +208,9 @@ export default function ArtworkDetail() {
     if (fallback.data) setListing(fallback.data as unknown as Listing);
     else setListing(null);
   }
-  useEffect(() => { if (id) fetchListing(id); }, [id]);
+  useEffect(() => {
+    if (id) fetchListing(id);
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;
@@ -207,13 +234,18 @@ export default function ArtworkDetail() {
     const poster = art?.cover_url || DEFAULT_COVER_URL;
     if (art?.media_kind === "video") {
       if (art?.animation_cid)
-        return { kind: "video" as const, poster, src: ipfsToHttp(`ipfs://${art.animation_cid}`) };
+        return {
+          kind: "video" as const,
+          poster,
+          src: ipfsToHttp(`ipfs://${art.animation_cid}`),
+        };
       if (meta?.animation_url)
         return { kind: "video" as const, poster, src: ipfsToHttp(meta.animation_url) };
       return { kind: "video" as const, poster, src: "" };
     }
-    if (art?.image_cid) return { kind: "image" as const, poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) };
-    if (meta?.image)  return { kind: "image" as const, poster, src: ipfsToHttp(meta.image) };
+    if (art?.image_cid)
+      return { kind: "image" as const, poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) };
+    if (meta?.image) return { kind: "image" as const, poster, src: ipfsToHttp(meta.image) };
     return { kind: "image" as const, poster, src: poster };
   }, [art?.media_kind, art?.animation_cid, art?.image_cid, art?.cover_url, meta?.animation_url, meta?.image]);
 
@@ -235,7 +267,9 @@ export default function ArtworkDetail() {
   const listingId = listing?.listing_id || listing?.id || null;
   const currentPrice = listing?.price ?? art.sale_price ?? "";
   const currentCurrency = (listing?.currency || art.sale_currency || "ETH") as "ETH" | "WETH" | "USD";
-  const displayPrice = currentPrice ? `${currentPrice} {currentCurrency}` : null;
+
+  // FIX: render the actual currency instead of the literal `{currentCurrency}`
+  const displayPrice = currentPrice ? formatPrice(currentPrice, currentCurrency) : null;
 
   const canBuy =
     Boolean(listingId && currentPrice) ||
@@ -243,7 +277,10 @@ export default function ArtworkDetail() {
 
   async function handleBuyClick() {
     try {
-      if (listingId) { setShowCheckout(true); return; }
+      if (listingId) {
+        setShowCheckout(true);
+        return;
+      }
       const body = {
         artwork_id: art.id,
         lister: art.owner,

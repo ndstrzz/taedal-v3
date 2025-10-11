@@ -8,7 +8,7 @@ const axios = require("axios");
 const cors = require("cors");
 const FormData = require("form-data");
 const { createClient } = require("@supabase/supabase-js");
-const { dhash64, sha256Hex, hammingHex } = require("./utils/similarity.cjs");
+const { dhash64, sha256Hex } = require("./utils/similarity.cjs");
 
 const app = express();
 const upload = multer({
@@ -33,7 +33,7 @@ const sb =
 // CORS (permissive + preflight with Authorization allowed)
 // ------------------------------------------------------------------
 const corsCfg = {
-  origin: (_origin, cb) => cb(null, true), // allow all origins (simplest + reliable)
+  origin: (_origin, cb) => cb(null, true),
   credentials: false,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
   allowedHeaders: ["Content-Type", "Authorization", "Accept"],
@@ -41,7 +41,7 @@ const corsCfg = {
 };
 
 app.use(cors(corsCfg));
-app.options("*", cors(corsCfg)); // ensure every preflight gets ACAO
+app.options("*", cors(corsCfg));
 
 // tiny request log
 app.use((req, _res, next) => {
@@ -50,13 +50,7 @@ app.use((req, _res, next) => {
 });
 
 // ------------------------------------------------------------------
-// Stripe webhook must receive RAW body (before express.json())
-// ------------------------------------------------------------------
-const { router: checkoutRouter, webhook: checkoutWebhook } = require(path.join(__dirname, "checkout.cjs"));
-app.post("/api/checkout/webhook", express.raw({ type: "application/json" }), checkoutWebhook);
-
-// ------------------------------------------------------------------
-// Then enable JSON for the rest of the API
+// Enable JSON for the API
 // ------------------------------------------------------------------
 app.use(express.json());
 
@@ -68,13 +62,25 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 // ------------------------------------------------------------------
 // Stripe/Crypto + Market routes
 // ------------------------------------------------------------------
-app.use("/api/checkout", checkoutRouter);
+try {
+  const checkoutRouter = require(path.join(__dirname, "checkout.cjs"));
+  app.use("/api/checkout", checkoutRouter);
+} catch (e) {
+  console.warn("[checkout] routes not mounted:", e?.message || e);
+}
 
+// Prefer server-side market router; fall back to src copy if present.
 try {
   const marketRouter = require(path.join(__dirname, "routes", "market.cjs"));
   app.use("/api/market", marketRouter);
-} catch (e) {
-  console.warn("[market] routes not mounted:", e?.message || e);
+} catch (e1) {
+  try {
+    const marketRouter = require(path.resolve(__dirname, "../src/routes/market.cjs"));
+    app.use("/api/market", marketRouter);
+    console.warn("[market] using src/routes/market.cjs (consider moving to server/routes)");
+  } catch (e2) {
+    console.warn("[market] routes not mounted:", e2?.message || e2);
+  }
 }
 
 // ------------------------------------------------------------------
@@ -285,7 +291,6 @@ app.post('/api/listings/fill', express.json(), async (req, res) => {
     res.status(500).json({ error: 'failed' });
   }
 });
-
 
 // ------------------------------------------------------------------
 app.listen(PORT, () => {

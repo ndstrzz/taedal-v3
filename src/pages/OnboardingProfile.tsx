@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../state/AuthContext'
 import { supabase } from '../lib/supabase'
 import { DEFAULT_AVATAR_URL, DEFAULT_COVER_URL } from '../lib/config'
-import { uploadPublicFile } from '../lib/storage'
+import { uploadPublicBlob } from '../lib/storage'
 
 export default function OnboardingProfile() {
   const { user } = useAuth()
@@ -39,7 +39,7 @@ export default function OnboardingProfile() {
     setBusy(true); setErr('')
     try {
       // MUST return a string URL
-      const url = await uploadPublicFile('avatars', user.id, f)
+      const url = await uploadPublicBlob('avatars', user.id, f)
       setAvatarUrl(url) // ✅ string, not object
     } catch (e: any) {
       setErr(e.message || 'Failed to upload avatar')
@@ -53,7 +53,7 @@ export default function OnboardingProfile() {
     if (!f || !user) return
     setBusy(true); setErr('')
     try {
-      const url = await uploadPublicFile('covers', user.id, f)
+      const url = await uploadPublicBlob('covers', user.id, f)
       setCoverUrl(url) // ✅ string, not object
     } catch (e: any) {
       setErr(e.message || 'Failed to upload cover')
