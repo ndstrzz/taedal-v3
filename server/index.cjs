@@ -26,16 +26,13 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
 // Public client (rarely used here)
-const sb =
-  SUPABASE_URL && SUPABASE_ANON_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-    : null;
+const sb = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+
 
 // Admin client (bypasses RLS — use carefully)
-const sbAdmin =
-  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-    : null;
+const sbAdmin = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+  : null;
 
 // ------------------------------------------------------------------
 // CORS (permissive + preflight with Authorization allowed)
@@ -195,7 +192,6 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
 app.post("/api/listings/create", async (req, res) => {
   try {
     const { artwork_id, lister, price, currency = "ETH" } = req.body || {};
-    if (!artwork_id || !lister || !price) return res.status(400).json({ error: "Missing fields" });
     if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
 
     const { data, error } = await sbAdmin
@@ -205,19 +201,13 @@ app.post("/api/listings/create", async (req, res) => {
       .single();
     if (error) throw error;
 
-    await sbAdmin.from("activity").insert({
-      artwork_id,
-      kind: "list",
-      actor: lister,
-      note: `Listed for ${price} ${currency}`,
-    });
-
     res.json({ ok: true, listing: data });
   } catch (e) {
     console.error("[listings/create]", e);
     res.status(500).json({ error: e?.message || "failed" });
   }
 });
+
 
 app.post("/api/listings/cancel", async (req, res) => {
   try {
