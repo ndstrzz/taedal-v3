@@ -28,14 +28,13 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 // Public client (rarely used here)
 const sb = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
-
 // Admin client (bypasses RLS — use carefully)
 const sbAdmin = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
   : null;
 
 // ------------------------------------------------------------------
-// CORS (permissive + preflight with Authorization allowed)
+// CORS
 // ------------------------------------------------------------------
 const corsCfg = {
   origin: (_origin, cb) => cb(null, true),
@@ -64,10 +63,13 @@ app.use(express.json());
 // Health
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
+// Simple verify (avoid 404s during create flow)
+app.post("/api/verify", (_req, res) => res.json({ similar: [] }));
+
 // Stripe/Crypto API
 app.use("/api/checkout", checkout.router);
 
-// Mount market routes if present (optional; we still keep mini routes below)
+// Try to mount market routes
 try {
   const marketRouter = require(path.join(__dirname, "routes", "market.cjs"));
   app.use("/api/market", marketRouter);
@@ -187,27 +189,49 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
 });
 
 // ------------------------------------------------------------------
-// Mini Listings API (now uses SERVICE ROLE)
+// Listings API (robust to schema differences)
+// Tries (lister, price) first; if column-not-found, retries (seller, price_eth).
 // ------------------------------------------------------------------
 app.post("/api/listings/create", async (req, res) => {
-  try {
-    const { artwork_id, lister, price, currency = "ETH" } = req.body || {};
-    if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
+  const body = req.body || {};
+  const { artwork_id, lister, price, currency = "ETH" } = body;
 
-    const { data, error } = await sbAdmin
+  if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
+  if (!artwork_id || !price) return res.status(400).json({ error: "Missing artwork_id or price" });
+
+  async function attemptInsert(cols) {
+    return sbAdmin
       .from("listings")
-      .insert({ artwork_id, lister, price, currency, status: "active" })
+      .insert({ ...cols, status: "active", currency })
       .select("*")
       .single();
-    if (error) throw error;
+  }
+
+  try {
+    // Attempt 1: columns 'lister' + 'price'
+    let { data, error } = await attemptInsert({ artwork_id, lister: lister || null, price });
+    if (error) {
+      const msg = `${error.message || ""} ${error.details || ""}`.toLowerCase();
+      const isColErr = msg.includes('column "price" does not exist') || msg.includes('column "lister" does not exist') || error.code === "42703";
+
+      if (!isColErr) throw error;
+
+      // Attempt 2: columns 'seller' + 'price_eth'
+      const { data: data2, error: err2 } = await attemptInsert({
+        artwork_id,
+        seller: lister || null,
+        price_eth: price,
+      });
+      if (err2) throw err2;
+      data = data2;
+    }
 
     res.json({ ok: true, listing: data });
   } catch (e) {
-    console.error("[listings/create]", e);
+    console.error("[listings/create] error:", e);
     res.status(500).json({ error: e?.message || "failed" });
   }
 });
-
 
 app.post("/api/listings/cancel", async (req, res) => {
   try {
@@ -256,7 +280,7 @@ app.post("/api/listings/fill", async (req, res) => {
       kind: "buy",
       actor: buyer,
       tx_hash,
-      note: `Bought for ${lst.price} ${lst.currency}`,
+      note: `Bought for ${lst.price ?? lst.price_eth} ${lst.currency}`,
     });
 
     res.json({ ok: true, listing: lst });
