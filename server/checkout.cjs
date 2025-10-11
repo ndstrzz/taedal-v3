@@ -80,4 +80,13 @@ router.post("/create-crypto-intent", async (req, res) => {
   }
 });
 
-module.exports = router;
+/**
+ * Stripe webhook (placeholder).
+ * If you add real webhook verification, replace this handler accordingly.
+ */
+function webhook(_req, res) {
+  // For now just acknowledge so the server doesn't error when index.cjs mounts it.
+  res.sendStatus(200);
+}
+
+module.exports = { router, webhook };

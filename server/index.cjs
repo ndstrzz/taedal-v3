@@ -8,7 +8,7 @@ const axios = require("axios");
 const cors = require("cors");
 const FormData = require("form-data");
 const { createClient } = require("@supabase/supabase-js");
-const { dhash64, sha256Hex } = require("./utils/similarity.cjs");
+const { dhash64, sha256Hex, hammingHex } = require("./utils/similarity.cjs");
 
 const app = express();
 const upload = multer({
@@ -43,14 +43,23 @@ const corsCfg = {
 app.use(cors(corsCfg));
 app.options("*", cors(corsCfg));
 
-// tiny request log
 app.use((req, _res, next) => {
   console.log("[api]", req.method, req.path, "from", req.headers.origin || "no-origin");
   next();
 });
 
 // ------------------------------------------------------------------
-// Enable JSON for the API
+// Stripe webhook must receive RAW body (before express.json())
+// ------------------------------------------------------------------
+const checkoutMod = require(path.join(__dirname, "checkout.cjs"));
+const checkoutRouter = checkoutMod.router || checkoutMod; // support either export style
+const checkoutWebhook =
+  checkoutMod.webhook || ((_req, res) => res.sendStatus(200));
+
+app.post("/api/checkout/webhook", express.raw({ type: "application/json" }), checkoutWebhook);
+
+// ------------------------------------------------------------------
+// Then enable JSON for the rest of the API
 // ------------------------------------------------------------------
 app.use(express.json());
 
@@ -62,25 +71,13 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 // ------------------------------------------------------------------
 // Stripe/Crypto + Market routes
 // ------------------------------------------------------------------
-try {
-  const checkoutRouter = require(path.join(__dirname, "checkout.cjs"));
-  app.use("/api/checkout", checkoutRouter);
-} catch (e) {
-  console.warn("[checkout] routes not mounted:", e?.message || e);
-}
+app.use("/api/checkout", checkoutRouter);
 
-// Prefer server-side market router; fall back to src copy if present.
 try {
   const marketRouter = require(path.join(__dirname, "routes", "market.cjs"));
   app.use("/api/market", marketRouter);
-} catch (e1) {
-  try {
-    const marketRouter = require(path.resolve(__dirname, "../src/routes/market.cjs"));
-    app.use("/api/market", marketRouter);
-    console.warn("[market] using src/routes/market.cjs (consider moving to server/routes)");
-  } catch (e2) {
-    console.warn("[market] routes not mounted:", e2?.message || e2);
-  }
+} catch (e) {
+  console.warn("[market] routes not mounted:", e?.message || e);
 }
 
 // ------------------------------------------------------------------
