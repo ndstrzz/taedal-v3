@@ -26,10 +26,7 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
 // Public client (rarely used here)
-const sb =
-  SUPABASE_URL && SUPABASE_ANON_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-    : null;
+const sb = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 // Admin client (bypasses RLS — use carefully)
 const sbAdmin =
@@ -38,7 +35,7 @@ const sbAdmin =
     : null;
 
 // ------------------------------------------------------------------
-// CORS (permissive)
+// CORS (permissive + preflight with Authorization allowed)
 // ------------------------------------------------------------------
 const corsCfg = {
   origin: (_origin, cb) => cb(null, true),
@@ -59,11 +56,7 @@ app.use((req, _res, next) => {
 // Stripe routes (webhook needs raw body BEFORE json())
 // ------------------------------------------------------------------
 const checkout = require(path.join(__dirname, "checkout.cjs"));
-app.post(
-  "/api/checkout/webhook",
-  express.raw({ type: "application/json" }),
-  checkout.webhook
-);
+app.post("/api/checkout/webhook", express.raw({ type: "application/json" }), checkout.webhook);
 
 // Enable JSON for normal routes
 app.use(express.json());
@@ -71,24 +64,13 @@ app.use(express.json());
 // Health
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-// Debug (no secrets) – helps verify envs are actually loaded on Render
-app.get("/api/_debug", (_req, res) => {
-  res.json({
-    ok: true,
-    supabase_url: !!SUPABASE_URL,
-    anon_key_len: SUPABASE_ANON_KEY ? SUPABASE_ANON_KEY.length : 0,
-    service_role_len: SUPABASE_SERVICE_ROLE_KEY ? SUPABASE_SERVICE_ROLE_KEY.length : 0,
-    pinata_jwt_len: PINATA_JWT ? PINATA_JWT.length : 0,
-  });
-});
-
 // Simple verify (avoid 404s during create flow)
 app.post("/api/verify", (_req, res) => res.json({ similar: [] }));
 
 // Stripe/Crypto API
 app.use("/api/checkout", checkout.router);
 
-// Optional market routes
+// Mount market routes if present (optional)
 try {
   const marketRouter = require(path.join(__dirname, "routes", "market.cjs"));
   app.use("/api/market", marketRouter);
@@ -101,8 +83,7 @@ try {
 // ------------------------------------------------------------------
 app.post("/api/pinata/pin-file", upload.single("file"), async (req, res) => {
   try {
-    if (!PINATA_JWT)
-      return res.status(500).json({ error: "Server misconfigured: PINATA_JWT missing" });
+    if (!PINATA_JWT) return res.status(500).json({ error: "Server misconfigured: PINATA_JWT missing" });
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
     const form = new FormData();
@@ -115,14 +96,17 @@ app.post("/api/pinata/pin-file", upload.single("file"), async (req, res) => {
     form.append("pinataMetadata", JSON.stringify({ name }));
     form.append("pinataOptions", JSON.stringify({ cidVersion: 1 }));
 
-    const { data } = await axios.post(
-      "https://api.pinata.cloud/pinning/pinFileToIPFS",
-      form,
-      { headers: { Authorization: `Bearer ${PINATA_JWT}`, ...form.getHeaders() }, maxBodyLength: Infinity }
-    );
+    const { data } = await axios.post("https://api.pinata.cloud/pinning/pinFileToIPFS", form, {
+      headers: { Authorization: `Bearer ${PINATA_JWT}`, ...form.getHeaders() },
+      maxBodyLength: Infinity,
+    });
 
     const cid = data.IpfsHash;
-    res.json({ cid, ipfsUri: `ipfs://${cid}`, gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}` });
+    res.json({
+      cid,
+      ipfsUri: `ipfs://${cid}`,
+      gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}`,
+    });
   } catch (err) {
     console.error("[pin-file] error", err?.response?.data || err.message);
     res.status(500).json({ error: "Pinning failed", details: err?.response?.data || err.message });
@@ -134,8 +118,7 @@ app.post("/api/pinata/pin-file", upload.single("file"), async (req, res) => {
 // ------------------------------------------------------------------
 app.post("/api/metadata", async (req, res) => {
   try {
-    if (!PINATA_JWT)
-      return res.status(500).json({ error: "Server misconfigured: PINATA_JWT missing" });
+    if (!PINATA_JWT) return res.status(500).json({ error: "Server misconfigured: PINATA_JWT missing" });
 
     const p = req.body || {};
     const image =
@@ -163,11 +146,9 @@ app.post("/api/metadata", async (req, res) => {
       properties: p.properties,
     };
 
-    const { data } = await axios.post(
-      "https://api.pinata.cloud/pinning/pinJSONToIPFS",
-      meta,
-      { headers: { Authorization: `Bearer ${PINATA_JWT}` } }
-    );
+    const { data } = await axios.post("https://api.pinata.cloud/pinning/pinJSONToIPFS", meta, {
+      headers: { Authorization: `Bearer ${PINATA_JWT}` },
+    });
 
     const cid = data.IpfsHash;
     res.json({
@@ -195,7 +176,11 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
 
     let dhash = null;
     if (mime.startsWith("image/")) {
-      try { dhash = await dhash64(buf); } catch (e) { console.warn("[hashes] dHash failed:", e?.message || e); }
+      try {
+        dhash = await dhash64(buf);
+      } catch (e) {
+        console.warn("[hashes] dHash failed:", e?.message || e);
+      }
     }
 
     res.json({ dhash64: dhash, sha256: sha });
@@ -206,70 +191,66 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
 });
 
 // ------------------------------------------------------------------
-// Listings API (robust + verbose errors)
+// Listings API — try multiple column variants before failing
 // ------------------------------------------------------------------
 app.post("/api/listings/create", async (req, res) => {
-  const { artwork_id, lister, price, currency = "ETH" } = req.body || {};
-
-  if (!sbAdmin) {
-    return res.status(500).json({ error: "Supabase (admin) not configured" });
-  }
-  if (!artwork_id || !price) {
-    return res.status(400).json({ error: "Missing artwork_id or price" });
-  }
-
-  const attemptInsert = (cols) =>
-    sbAdmin
-      .from("listings")
-      .insert({ ...cols, status: "active", currency })
-      .select("*")
-      .single();
-
   try {
-    // Attempt A: lister + price
-    let { data, error } = await attemptInsert({
+    if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
+
+    const { artwork_id, lister, price, currency } = req.body || {};
+    if (!artwork_id || !price) return res.status(400).json({ error: "Missing artwork_id or price" });
+
+    const attempts = [];
+
+    // Helper to run a single attempt and capture errors
+    async function tryInsert(variantName, cols) {
+      const { data, error } = await sbAdmin
+        .from("listings")
+        .insert({ ...cols, status: "active" })
+        .select("*")
+        .single();
+      if (error) {
+        const msg = `[${variantName}] ${error.code || ""} ${error.message || ""} ${error.details || ""}`.trim();
+        attempts.push(msg);
+        return null;
+      }
+      return data;
+    }
+
+    // Variant A: columns: lister + price (+ currency if provided)
+    const vA = await tryInsert("A", {
       artwork_id,
       lister: lister || null,
       price,
+      ...(currency ? { currency } : {}),
     });
+    if (vA) return res.json({ ok: true, listing: vA });
 
-    if (error) {
-      const msg = `${error.message || ""} ${error.details || ""}`.toLowerCase();
-      const isColErr =
-        error.code === "42703" ||
-        msg.includes('column "price" does not exist') ||
-        msg.includes('column "lister" does not exist');
+    // Variant B: columns: seller + price_eth (+ currency if provided)
+    const vB = await tryInsert("B", {
+      artwork_id,
+      seller: lister || null,
+      price_eth: price,
+      ...(currency ? { currency } : {}),
+    });
+    if (vB) return res.json({ ok: true, listing: vB });
 
-      if (!isColErr) {
-        return res.status(500).json({
-          error: "Insert failed (variant A)",
-          code: error.code,
-          details: error.details,
-          message: error.message,
-        });
-      }
+    // Variant C: seller + price_eth (assume no currency column)
+    const vC = await tryInsert("C", {
+      artwork_id,
+      seller: lister || null,
+      price_eth: price,
+    });
+    if (vC) return res.json({ ok: true, listing: vC });
 
-      // Attempt B: seller + price_eth
-      const alt = await attemptInsert({
-        artwork_id,
-        seller: lister || null,
-        price_eth: price,
-      });
-      if (alt.error) {
-        return res.status(500).json({
-          error: "Insert failed (variant B)",
-          code: alt.error.code,
-          details: alt.error.details,
-          message: alt.error.message,
-        });
-      }
-      data = alt.data;
-    }
-
-    return res.json({ ok: true, listing: data });
+    // All failed → return a consolidated error
+    return res.status(500).json({
+      error: "Insert failed. Tried variants A, B, C.",
+      attempts,
+    });
   } catch (e) {
     console.error("[listings/create] unexpected:", e);
-    return res.status(500).json({ error: String(e?.message || e) });
+    res.status(500).json({ error: e?.message || "failed" });
   }
 });
 
@@ -320,7 +301,7 @@ app.post("/api/listings/fill", async (req, res) => {
       kind: "buy",
       actor: buyer,
       tx_hash,
-      note: `Bought for ${lst.price ?? lst.price_eth} ${lst.currency}`,
+      note: `Bought for ${lst.price ?? lst.price_eth} ${lst.currency || "ETH"}`,
     });
 
     res.json({ ok: true, listing: lst });
