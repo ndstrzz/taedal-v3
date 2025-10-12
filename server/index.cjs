@@ -1,3 +1,4 @@
+// server/index.cjs
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 
@@ -10,31 +11,34 @@ const { createClient } = require("@supabase/supabase-js");
 const { dhash64, sha256Hex } = require("./utils/similarity.cjs");
 
 const app = express();
-app.set("trust proxy", 1);
-
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 },
 });
 
 // ----------------------------- Config -----------------------------
-const HOST = process.env.HOST || "0.0.0.0";        // Render needs 0.0.0.0
+const HOST = "0.0.0.0";
 const PORT = Number(process.env.PORT || 5000);
-
 const PINATA_JWT = process.env.PINATA_JWT || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
 // public client (only for verifying passed JWT)
-const sb = SUPABASE_URL && SUPABASE_ANON_KEY
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
-  : null;
+const sb =
+  SUPABASE_URL && SUPABASE_ANON_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+    : null;
 
 // admin client (bypasses RLS — careful)
-const sbAdmin = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
-  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
-  : null;
+const sbAdmin =
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+    : null;
 
 // ----------------------------- CORS & logs -----------------------------
 const corsCfg = {
@@ -67,7 +71,7 @@ async function getUserFromRequest(req) {
   }
 }
 
-// ----------------------------- Checkout (router-only module) -----------------------------
+// ----------------------------- Checkout router -----------------------------
 let checkout = null;
 try {
   checkout = require(path.join(__dirname, "checkout.cjs"));
@@ -79,9 +83,13 @@ try {
   console.warn("[checkout] not mounted:", e?.message || e);
 }
 
-// webhook BEFORE json() (needs raw body)
+// webhook BEFORE json()
 if (checkout && typeof checkout.webhook === "function") {
-  app.post("/api/checkout/webhook", express.raw({ type: "application/json" }), checkout.webhook);
+  app.post(
+    "/api/checkout/webhook",
+    express.raw({ type: "application/json" }),
+    checkout.webhook
+  );
 } else {
   console.warn("[checkout] webhook missing — skipping");
 }
@@ -100,10 +108,18 @@ if (checkout?.router) {
   app.use("/api/checkout", checkout.router);
 } else {
   console.warn("[checkout] router missing — installing fallbacks");
-  app.get("/api/checkout/health", (_req, res) => res.json({ ok: true, router: false }));
-  app.get("/api/checkout/session", (req, res) => res.json({ ok: true, sid: String(req.query.sid || "") }));
-  app.post("/api/checkout/create-stripe-session", (_req, res) => res.status(501).json({ error: "Stripe not configured" }));
-  app.post("/api/checkout/create-crypto-intent", (_req, res) => res.status(501).json({ error: "Crypto checkout not configured" }));
+  app.get("/api/checkout/health", (_req, res) =>
+    res.json({ ok: true, router: false })
+  );
+  app.get("/api/checkout/session", (req, res) =>
+    res.json({ ok: true, sid: String(req.query.sid || "") })
+  );
+  app.post("/api/checkout/create-stripe-session", (_req, res) =>
+    res.status(501).json({ error: "Stripe not configured" })
+  );
+  app.post("/api/checkout/create-crypto-intent", (_req, res) =>
+    res.status(501).json({ error: "Crypto checkout not configured" })
+  );
 }
 
 // ----------------------------- Pinata -----------------------------
@@ -113,20 +129,38 @@ app.post("/api/pinata/pin-file", upload.single("file"), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
     const form = new FormData();
-    form.append("file", req.file.buffer, { filename: req.file.originalname, contentType: req.file.mimetype });
-    form.append("pinataMetadata", JSON.stringify({ name: (req.body?.name || req.file.originalname || "upload").slice(0, 80) }));
+    form.append("file", req.file.buffer, {
+      filename: req.file.originalname,
+      contentType: req.file.mimetype,
+    });
+    form.append(
+      "pinataMetadata",
+      JSON.stringify({
+        name: (req.body?.name || req.file.originalname || "upload").slice(0, 80),
+      })
+    );
     form.append("pinataOptions", JSON.stringify({ cidVersion: 1 }));
 
-    const { data } = await axios.post("https://api.pinata.cloud/pinning/pinFileToIPFS", form, {
-      headers: { Authorization: `Bearer ${PINATA_JWT}`, ...form.getHeaders() },
-      maxBodyLength: Infinity,
-    });
+    const { data } = await axios.post(
+      "https://api.pinata.cloud/pinning/pinFileToIPFS",
+      form,
+      {
+        headers: { Authorization: `Bearer ${PINATA_JWT}`, ...form.getHeaders() },
+        maxBodyLength: Infinity,
+      }
+    );
 
     const cid = data.IpfsHash;
-    res.json({ cid, ipfsUri: `ipfs://${cid}`, gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}` });
+    res.json({
+      cid,
+      ipfsUri: `ipfs://${cid}`,
+      gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}`,
+    });
   } catch (err) {
     console.error("[pin-file] error", err?.response?.data || err.message);
-    res.status(500).json({ error: "Pinning failed", details: err?.response?.data || err.message });
+    res
+      .status(500)
+      .json({ error: "Pinning failed", details: err?.response?.data || err.message });
   }
 });
 
@@ -136,13 +170,20 @@ app.post("/api/metadata", async (req, res) => {
 
     const p = req.body || {};
     const image =
-      (typeof p.image === "string" && p.image.trim()) ? p.image.trim()
-      : p.imageCid ? `ipfs://${p.imageCid}` : undefined;
+      typeof p.image === "string" && p.image.trim()
+        ? p.image.trim()
+        : p.imageCid
+        ? `ipfs://${p.imageCid}`
+        : undefined;
 
     const animation_url =
-      (typeof p.animation_url === "string" && p.animation_url.trim()) ? p.animation_url.trim()
-      : (typeof p.animationUrl === "string" && p.animationUrl.trim()) ? p.animationUrl.trim()
-      : p.animationCid ? `ipfs://${p.animationCid}` : undefined;
+      typeof p.animation_url === "string" && p.animation_url.trim()
+        ? p.animation_url.trim()
+        : typeof p.animationUrl === "string" && p.animationUrl.trim()
+        ? p.animationUrl.trim()
+        : p.animationCid
+        ? `ipfs://${p.animationCid}`
+        : undefined;
 
     const meta = {
       name: String(p.name || "Untitled"),
@@ -153,15 +194,24 @@ app.post("/api/metadata", async (req, res) => {
       properties: p.properties,
     };
 
-    const { data } = await axios.post("https://api.pinata.cloud/pinning/pinJSONToIPFS", meta, {
-      headers: { Authorization: `Bearer ${PINATA_JWT}` },
-    });
+    const { data } = await axios.post(
+      "https://api.pinata.cloud/pinning/pinJSONToIPFS",
+      meta,
+      { headers: { Authorization: `Bearer ${PINATA_JWT}` } }
+    );
 
     const cid = data.IpfsHash;
-    res.json({ metadata_cid: cid, metadata_url: `ipfs://${cid}`, ipfsUri: `ipfs://${cid}`, gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}` });
+    res.json({
+      metadata_cid: cid,
+      metadata_url: `ipfs://${cid}`,
+      ipfsUri: `ipfs://${cid}`,
+      gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}`,
+    });
   } catch (err) {
     console.error("[metadata] error", err?.response?.data || err.message);
-    res.status(500).json({ error: "Pin JSON failed", details: err?.response?.data || err.message });
+    res
+      .status(500)
+      .json({ error: "Pin JSON failed", details: err?.response?.data || err.message });
   }
 });
 
@@ -175,7 +225,11 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
 
     let dhash = null;
     if (mime.startsWith("image/")) {
-      try { dhash = await dhash64(buf); } catch (e) { console.warn("[hashes] dHash failed:", e?.message || e); }
+      try {
+        dhash = await dhash64(buf);
+      } catch (e) {
+        console.warn("[hashes] dHash failed:", e?.message || e);
+      }
     }
     res.json({ dhash64: dhash, sha256: sha });
   } catch (e) {
@@ -188,32 +242,41 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
 app.post("/api/listings/create", async (req, res) => {
   try {
     if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
-
     const user = await getUserFromRequest(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
 
     const { artwork_id, price, currency = "ETH" } = req.body || {};
     if (!artwork_id || !price) return res.status(400).json({ error: "Missing artwork_id or price" });
 
-    const { data: art, error: artErr } = await sbAdmin.from("artworks").select("id, owner, status").eq("id", artwork_id).single();
+    const { data: art, error: artErr } = await sbAdmin
+      .from("artworks")
+      .select("id, owner, status")
+      .eq("id", artwork_id)
+      .single();
     if (artErr) return res.status(404).json({ error: "Artwork not found" });
     if (art.owner !== user.id) return res.status(403).json({ error: "Forbidden (not the owner)" });
 
     const attempts = [];
     async function tryInsert(name, cols) {
-      const { data, error } = await sbAdmin.from("listings").insert(cols).select("*").single();
+      const { data, error } = await sbAdmin
+        .from("listings")
+        .insert(cols)
+        .select("*")
+        .single();
       if (error) {
-        attempts.push(`[${name}] ${error.code || ""} ${error.message || ""} ${error.details || ""}`.trim());
+        attempts.push(
+          `[${name}] ${error.code || ""} ${error.message || ""} ${error.details || ""}`.trim()
+        );
         return null;
       }
       return data;
     }
 
     const variants = [
-      ["A", { artwork_id, lister: user.id, seller: user.id, price,        price_eth: price, currency, status: "active" }],
-      ["B", { artwork_id, lister: user.id,                  price,                          currency, status: "active" }],
-      ["C", { artwork_id,                 seller: user.id,                 price_eth: price, currency, status: "active" }],
-      ["D", { artwork_id, lister: user.id, seller: user.id,               price_eth: price, currency, status: "active" }],
+      ["A", { artwork_id, lister: user.id, seller: user.id, price, price_eth: price, currency, status: "active" }],
+      ["B", { artwork_id, lister: user.id, price, currency, status: "active" }],
+      ["C", { artwork_id, seller: user.id, price_eth: price, currency, status: "active" }],
+      ["D", { artwork_id, lister: user.id, seller: user.id, price_eth: price, currency, status: "active" }],
     ];
 
     for (const [name, cols] of variants) {
@@ -238,7 +301,10 @@ app.post("/api/listings/cancel", async (req, res) => {
     if (!listing_id) return res.status(400).json({ error: "Missing listing_id" });
 
     const { data: lst0, error: e0 } = await sbAdmin
-      .from("listings").select("id, artwork_id, lister, seller, status").eq("id", listing_id).single();
+      .from("listings")
+      .select("id, artwork_id, lister, seller, status")
+      .eq("id", listing_id)
+      .single();
     if (e0 || !lst0) return res.status(404).json({ error: "Listing not found" });
 
     const { data: art0 } = await sbAdmin.from("artworks").select("owner").eq("id", lst0.artwork_id).single();
@@ -246,11 +312,18 @@ app.post("/api/listings/cancel", async (req, res) => {
     if (!canCancel) return res.status(403).json({ error: "Forbidden" });
 
     const { data: lst, error } = await sbAdmin
-      .from("listings").update({ status: "cancelled", updated_at: new Date().toISOString() }).eq("id", listing_id).select("*").single();
+      .from("listings")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .eq("id", listing_id)
+      .select("*")
+      .single();
     if (error) throw error;
 
     await sbAdmin.from("activity").insert({
-      artwork_id: lst.artwork_id, kind: "cancel_list", actor: user.id, note: "Listing cancelled",
+      artwork_id: lst.artwork_id,
+      kind: "cancel_list",
+      actor: user.id,
+      note: "Listing cancelled",
     });
 
     res.json({ ok: true, listing: lst });
@@ -270,11 +343,18 @@ app.post("/api/listings/fill", async (req, res) => {
     if (!listing_id) return res.status(400).json({ error: "Missing listing_id" });
 
     const { data: lst, error: e1 } = await sbAdmin
-      .from("listings").update({ status: "filled", updated_at: new Date().toISOString() }).eq("id", listing_id).select("*").single();
+      .from("listings")
+      .update({ status: "filled", updated_at: new Date().toISOString() })
+      .eq("id", listing_id)
+      .select("*")
+      .single();
     if (e1) throw e1;
 
     await sbAdmin.from("activity").insert({
-      artwork_id: lst.artwork_id, kind: "buy", actor: user.id, tx_hash,
+      artwork_id: lst.artwork_id,
+      kind: "buy",
+      actor: user.id,
+      tx_hash,
       note: `Bought for ${lst.price ?? lst.price_eth} ${lst.currency || "ETH"}`,
     });
 
@@ -294,11 +374,7 @@ app.get("/api/_debug/supabase", (_req, res) => {
   });
 });
 
-// ----------------------------- Listen -----------------------------
-const server = app.listen(PORT, HOST, () => {
+// ----------------------------- Listen (only here!) -----------------------------
+app.listen(PORT, HOST, () => {
   console.log(`API server listening on http://${HOST}:${PORT}`);
-});
-server.on("error", (err) => {
-  console.error("[listen] error", err);
-  process.exit(1);
 });
