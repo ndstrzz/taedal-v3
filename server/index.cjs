@@ -311,6 +311,14 @@ app.post("/api/listings/fill", async (req, res) => {
   }
 });
 
+app.get('/api/_debug/supabase', (_req, res) => {
+  res.json({
+    hasUrl: !!process.env.SUPABASE_URL,
+    hasServiceKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+    usingAdminClient: !!sbAdmin
+  });
+});
+
 // ------------------------------------------------------------------
 app.listen(PORT, () => {
   console.log(`API server listening on http://localhost:${PORT}`);
