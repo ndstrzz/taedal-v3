@@ -1,156 +1,106 @@
 // server/checkout.cjs
 const express = require("express");
-const router = express.Router();
-
 const Stripe = require("stripe");
 const { createClient } = require("@supabase/supabase-js");
 
-// -------- ENV --------
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
-const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
-const FRONTEND_URL =
-  process.env.FRONTEND_URL || "https://taedal-v3.vercel.app"; // <- your Vercel app URL
+const router = express.Router();
 
-const SUPABASE_URL = process.env.SUPABASE_URL || "";
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+// ---- env
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
+const FRONTEND = process.env.FRONTEND_ORIGIN || "http://localhost:3000";
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Stripe + Supabase (admin for webhook)
-const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
-const sbAdmin =
-  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      })
-    : null;
-
-// Small helper to build absolute URLs to your frontend
-function feUrl(path = "") {
-  return `${FRONTEND_URL.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
+if (!STRIPE_SECRET_KEY) {
+  console.warn("[checkout] STRIPE_SECRET_KEY missing");
 }
+const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 
-// ---------- Health ----------
-router.get("/health", (req, res) => {
+const sbAdmin = (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+  : null;
+
+// currencies with 0 decimals in Stripe (no “cents”)
+const ZERO_DECIMAL = new Set(["jpy", "krw"]);
+
+// GET /api/checkout/health
+router.get("/health", (_req, res) => {
   res.json({
     ok: true,
     stripeConfigured: !!stripe,
-    webhookConfigured: !!STRIPE_WEBHOOK_SECRET,
-    frontend: feUrl(""),
+    webhookConfigured: !!process.env.STRIPE_WEBHOOK_SECRET,
+    frontend: FRONTEND,
   });
 });
 
-// ---------- Create Stripe Checkout Session ----------
-/**
- * Body (example):
- * {
- *   "name": "buy",
- *   "amount": 1200,          // amount in smallest unit (e.g. cents)
- *   "currency": "usd",
- *   "listing_id": "uuid..."  // optional: used to mark filled on webhook
- * }
- */
+// POST /api/checkout/create-stripe-session
 router.post("/create-stripe-session", async (req, res) => {
   try {
-    if (!stripe) {
-      return res.status(501).json({ error: "Stripe not configured" });
+    if (!stripe) return res.status(500).json({ error: "Stripe not configured" });
+    if (!sbAdmin) return res.status(500).json({ error: "Supabase admin not configured" });
+
+    const { listing_id, success_url, cancel_url } = req.body || {};
+    if (!listing_id) return res.status(400).json({ error: "listing_id required" });
+
+    // fetch the listing + a bit of artwork data for display
+    const { data: lst, error } = await sbAdmin
+      .from("listings")
+      .select("id, price, price_eth, currency, artwork:artworks(name, image_url)")
+      .eq("id", listing_id)
+      .single();
+
+    if (error || !lst) return res.status(404).json({ error: "Listing not found" });
+
+    // figure out currency + numeric price
+    const currency = String(lst.currency || "usd").toLowerCase();
+    const priceNumber = Number(
+      lst.price ?? lst.price_eth // choose whichever your app uses for fiat
+    );
+    if (!Number.isFinite(priceNumber)) {
+      return res.status(400).json({ error: "Invalid price on listing" });
     }
 
-    const { name = "buy", amount, currency = "usd", listing_id } = req.body || {};
-    // basic validation
-    const amt = Number(amount);
-    if (!Number.isFinite(amt) || amt <= 0) {
-      return res.status(400).json({ error: "Invalid amount" });
+    // convert to smallest unit integer
+    let unitAmount;
+    if (ZERO_DECIMAL.has(currency)) {
+      unitAmount = Math.round(priceNumber); // JPY/KRW: no cents
+    } else {
+      unitAmount = Math.round(priceNumber * 100); // e.g. USD cents
     }
+    if (unitAmount <= 0) return res.status(400).json({ error: "Invalid amount" });
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      payment_method_types: ["card"],
       line_items: [
         {
           price_data: {
-            currency: String(currency).toLowerCase(),
-            unit_amount: Math.round(amt),
-            product_data: { name: String(name || "Item") },
+            currency,
+            unit_amount: unitAmount,
+            product_data: {
+              name: lst.artwork?.name || "Artwork",
+              images: lst.artwork?.image_url ? [lst.artwork.image_url] : [],
+            },
           },
           quantity: 1,
         },
       ],
-      success_url: feUrl("checkout/success?session_id={CHECKOUT_SESSION_ID}"),
-      cancel_url: feUrl("checkout/cancel"),
-      metadata: listing_id ? { listing_id } : undefined,
+      success_url: success_url || `${FRONTEND}/checkout/success?sid={CHECKOUT_SESSION_ID}`,
+      cancel_url: cancel_url || `${FRONTEND}/checkout/cancel`,
+      metadata: { listing_id: String(lst.id) },
     });
 
-    return res.json({ url: session.url, id: session.id });
+    return res.json({ id: session.id, url: session.url });
   } catch (e) {
-    console.error("[stripe] create session error:", e);
-    return res.status(500).json({ error: "Failed to create session", details: e?.message });
+    console.error("[create-stripe-session] error:", e?.raw || e);
+    const msg = e?.raw?.message || e?.message || "Stripe error";
+    return res.status(400).json({ error: msg });
   }
 });
 
-// ---------- Webhook (exported for index.cjs to mount with express.raw) ----------
-async function webhook(req, res) {
-  if (!STRIPE_WEBHOOK_SECRET) {
-    // If you haven’t set a webhook secret yet, return 501 so Stripe retries later.
-    return res.status(501).send("Webhook not configured");
-  }
-  if (!stripe) return res.status(501).send("Stripe not configured");
-
-  const sig = req.headers["stripe-signature"];
-  let event;
-
-  try {
-    // req.body is a Buffer here because index.cjs mounts with express.raw
-    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
-  } catch (err) {
-    console.error("[stripe] webhook signature verification failed:", err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  try {
-    switch (event.type) {
-      case "checkout.session.completed": {
-        const session = event.data.object;
-        const listingId = session.metadata?.listing_id;
-
-        // Optional: mark listing filled in Supabase
-        if (listingId && sbAdmin) {
-          const { data, error } = await sbAdmin
-            .from("listings")
-            .update({
-              status: "filled",
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", listingId)
-            .select("*")
-            .single();
-
-          if (error) {
-            console.error("[webhook] supabase update failed:", error);
-          } else {
-            // record activity
-            await sbAdmin.from("activity").insert({
-              artwork_id: data.artwork_id,
-              kind: "buy",
-              actor: session.customer || "stripe",
-              tx_hash: session.payment_intent || null,
-              note: `Card checkout via Stripe: ${session.currency?.toUpperCase()} ${(
-                (session.amount_total || 0) / 100
-              ).toFixed(2)}`,
-            });
-          }
-        }
-        break;
-      }
-
-      default:
-        // Handle other events if you need to
-        break;
-    }
-
-    return res.status(200).send("ok");
-  } catch (e) {
-    console.error("[stripe] webhook processing error:", e);
-    return res.status(500).send("server error");
-  }
-}
-
-module.exports = { router, webhook };
+module.exports = {
+  router,
+  // keep your webhook export here if you have one:
+  webhook: module.exports?.webhook,
+};
