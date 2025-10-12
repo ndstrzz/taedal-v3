@@ -74,6 +74,35 @@ async function getUserFromRequest(req) {
   }
 }
 
+// Helper: resilient listing status update (handles missing updated_at)
+async function safeSetListingStatus(listingId, status, extra = {}) {
+  // Try with updated_at first
+  let { data, error } = await sbAdmin
+    .from("listings")
+    .update({ status, updated_at: new Date().toISOString(), ...extra })
+    .eq("id", listingId)
+    .select("*")
+    .single();
+
+  // If updated_at column doesn't exist, retry without it
+  const msg = ((error?.message || "") + " " + (error?.details || "")).toLowerCase();
+  const missingCol = error?.code === "42703" || msg.includes('column "updated_at" does not exist');
+
+  if (error && missingCol) {
+    const r2 = await sbAdmin
+      .from("listings")
+      .update({ status, ...extra })
+      .eq("id", listingId)
+      .select("*")
+      .single();
+    data = r2.data;
+    error = r2.error;
+  }
+
+  if (error) throw error;
+  return data;
+}
+
 // ------------------------------------------------------------------
 // Stripe routes (webhook needs raw body BEFORE json())
 // ------------------------------------------------------------------
@@ -288,13 +317,7 @@ app.post("/api/listings/cancel", async (req, res) => {
     const canCancel = [lst0.lister, lst0.seller, art0?.owner].includes(user.id);
     if (!canCancel) return res.status(403).json({ error: "Forbidden" });
 
-    const { data: lst, error } = await sbAdmin
-      .from("listings")
-      .update({ status: "cancelled", updated_at: new Date().toISOString() })
-      .eq("id", listing_id)
-      .select("*")
-      .single();
-    if (error) throw error;
+    const lst = await safeSetListingStatus(listing_id, "cancelled");
 
     await sbAdmin.from("activity").insert({
       artwork_id: lst.artwork_id,
@@ -319,13 +342,7 @@ app.post("/api/listings/fill", async (req, res) => {
     const { listing_id, tx_hash } = req.body || {};
     if (!listing_id) return res.status(400).json({ error: "Missing listing_id" });
 
-    const { data: lst, error: e1 } = await sbAdmin
-      .from("listings")
-      .update({ status: "filled", updated_at: new Date().toISOString() })
-      .eq("id", listing_id)
-      .select("*")
-      .single();
-    if (e1) throw e1;
+    const lst = await safeSetListingStatus(listing_id, "filled");
 
     await sbAdmin.from("activity").insert({
       artwork_id: lst.artwork_id,
