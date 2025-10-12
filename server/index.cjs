@@ -25,13 +25,20 @@ const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
-// Public client (rarely used here)
-const sb = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+// Public client (used only for verifying a passed JWT)
+const sb =
+  SUPABASE_URL && SUPABASE_ANON_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+    : null;
 
 // Admin client (bypasses RLS — use carefully)
 const sbAdmin =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
     : null;
 
 // ------------------------------------------------------------------
@@ -51,6 +58,21 @@ app.use((req, _res, next) => {
   console.log("[api]", req.method, req.path, "from", req.headers.origin || "no-origin");
   next();
 });
+
+// Tiny auth helper: read Bearer token and resolve the Supabase user
+async function getUserFromRequest(req) {
+  try {
+    if (!sb) return null;
+    const auth = req.headers.authorization || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+    if (!token) return null;
+    const { data, error } = await sb.auth.getUser(token);
+    if (error || !data?.user) return null;
+    return data.user;
+  } catch {
+    return null;
+  }
+}
 
 // ------------------------------------------------------------------
 // Stripe routes (webhook needs raw body BEFORE json())
@@ -191,63 +213,56 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
 });
 
 // ------------------------------------------------------------------
-// Listings API — try multiple column variants before failing
+// Listings API — server-authoritative, tolerant to schema variants
 // ------------------------------------------------------------------
 app.post("/api/listings/create", async (req, res) => {
   try {
     if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
 
-    const { artwork_id, lister, price, currency } = req.body || {};
+    // 1) Auth: the caller must be a signed-in user
+    const user = await getUserFromRequest(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    // 2) Validate payload
+    const { artwork_id, price, currency = "ETH" } = req.body || {};
     if (!artwork_id || !price) return res.status(400).json({ error: "Missing artwork_id or price" });
 
+    // 3) Enforce ownership: only the artwork owner can list
+    const { data: art, error: artErr } = await sbAdmin
+      .from("artworks")
+      .select("id, owner, status")
+      .eq("id", artwork_id)
+      .single();
+    if (artErr) return res.status(404).json({ error: "Artwork not found" });
+    if (art.owner !== user.id) return res.status(403).json({ error: "Forbidden (not the owner)" });
+
+    // 4) Try several column variants. If your DB has BOTH lister & seller NOT NULL,
+    //    the “both” variants will succeed. If only one exists, the others will.
     const attempts = [];
 
-    // Helper to run a single attempt and capture errors
-    async function tryInsert(variantName, cols) {
-      const { data, error } = await sbAdmin
-        .from("listings")
-        .insert({ ...cols, status: "active" })
-        .select("*")
-        .single();
+    async function tryInsert(name, cols) {
+      const { data, error } = await sbAdmin.from("listings").insert(cols).select("*").single();
       if (error) {
-        const msg = `[${variantName}] ${error.code || ""} ${error.message || ""} ${error.details || ""}`.trim();
-        attempts.push(msg);
+        attempts.push(`[${name}] ${error.code || ""} ${error.message || ""} ${error.details || ""}`.trim());
         return null;
       }
       return data;
     }
 
-    // Variant A: columns: lister + price (+ currency if provided)
-    const vA = await tryInsert("A", {
-      artwork_id,
-      lister: lister || null,
-      price,
-      ...(currency ? { currency } : {}),
-    });
-    if (vA) return res.json({ ok: true, listing: vA });
+    // prefer writing both user columns first (handles NOT NULL on both)
+    const variants = [
+      ["A", { artwork_id, lister: user.id, seller: user.id, price, price_eth: price, currency, status: "active" }],
+      ["B", { artwork_id, lister: user.id, price, currency, status: "active" }],
+      ["C", { artwork_id, seller: user.id, price_eth: price, currency, status: "active" }],
+      ["D", { artwork_id, lister: user.id, seller: user.id, price_eth: price, currency, status: "active" }],
+    ];
 
-    // Variant B: columns: seller + price_eth (+ currency if provided)
-    const vB = await tryInsert("B", {
-      artwork_id,
-      seller: lister || null,
-      price_eth: price,
-      ...(currency ? { currency } : {}),
-    });
-    if (vB) return res.json({ ok: true, listing: vB });
+    for (const [name, cols] of variants) {
+      const row = await tryInsert(name, cols);
+      if (row) return res.json({ ok: true, listing: row });
+    }
 
-    // Variant C: seller + price_eth (assume no currency column)
-    const vC = await tryInsert("C", {
-      artwork_id,
-      seller: lister || null,
-      price_eth: price,
-    });
-    if (vC) return res.json({ ok: true, listing: vC });
-
-    // All failed → return a consolidated error
-    return res.status(500).json({
-      error: "Insert failed. Tried variants A, B, C.",
-      attempts,
-    });
+    return res.status(500).json({ error: "Insert failed. Tried variants A–D.", attempts });
   } catch (e) {
     console.error("[listings/create] unexpected:", e);
     res.status(500).json({ error: e?.message || "failed" });
@@ -256,22 +271,37 @@ app.post("/api/listings/create", async (req, res) => {
 
 app.post("/api/listings/cancel", async (req, res) => {
   try {
-    const { listing_id, actor } = req.body || {};
-    if (!listing_id || !actor) return res.status(400).json({ error: "Missing fields" });
     if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
+    const user = await getUserFromRequest(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-    const { data: lst, error: e0 } = await sbAdmin
+    const { listing_id } = req.body || {};
+    if (!listing_id) return res.status(400).json({ error: "Missing listing_id" });
+
+    // ensure actor is owner/lister
+    const { data: lst0, error: e0 } = await sbAdmin
+      .from("listings")
+      .select("id, artwork_id, lister, seller, status")
+      .eq("id", listing_id)
+      .single();
+    if (e0 || !lst0) return res.status(404).json({ error: "Listing not found" });
+
+    const { data: art0 } = await sbAdmin.from("artworks").select("owner").eq("id", lst0.artwork_id).single();
+    const canCancel = [lst0.lister, lst0.seller, art0?.owner].includes(user.id);
+    if (!canCancel) return res.status(403).json({ error: "Forbidden" });
+
+    const { data: lst, error } = await sbAdmin
       .from("listings")
       .update({ status: "cancelled", updated_at: new Date().toISOString() })
       .eq("id", listing_id)
       .select("*")
       .single();
-    if (e0) throw e0;
+    if (error) throw error;
 
     await sbAdmin.from("activity").insert({
       artwork_id: lst.artwork_id,
       kind: "cancel_list",
-      actor,
+      actor: user.id,
       note: "Listing cancelled",
     });
 
@@ -284,9 +314,12 @@ app.post("/api/listings/cancel", async (req, res) => {
 
 app.post("/api/listings/fill", async (req, res) => {
   try {
-    const { listing_id, buyer, tx_hash } = req.body || {};
-    if (!listing_id || !buyer) return res.status(400).json({ error: "Missing fields" });
     if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
+    const user = await getUserFromRequest(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const { listing_id, tx_hash } = req.body || {};
+    if (!listing_id) return res.status(400).json({ error: "Missing listing_id" });
 
     const { data: lst, error: e1 } = await sbAdmin
       .from("listings")
@@ -299,7 +332,7 @@ app.post("/api/listings/fill", async (req, res) => {
     await sbAdmin.from("activity").insert({
       artwork_id: lst.artwork_id,
       kind: "buy",
-      actor: buyer,
+      actor: user.id,
       tx_hash,
       note: `Bought for ${lst.price ?? lst.price_eth} ${lst.currency || "ETH"}`,
     });
@@ -311,11 +344,12 @@ app.post("/api/listings/fill", async (req, res) => {
   }
 });
 
-app.get('/api/_debug/supabase', (_req, res) => {
+// Debug endpoint (optional)
+app.get("/api/_debug/supabase", (_req, res) => {
   res.json({
     hasUrl: !!process.env.SUPABASE_URL,
     hasServiceKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
-    usingAdminClient: !!sbAdmin
+    usingAdminClient: !!sbAdmin,
   });
 });
 
