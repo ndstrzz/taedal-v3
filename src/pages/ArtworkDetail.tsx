@@ -3,7 +3,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { ipfsToHttp } from "../lib/ipfs-url";
-import { DEFAULT_COVER_URL, API_BASE } from "../lib/config";
+import { DEFAULT_COVER_URL } from "../lib/config";
+import { apiFetch } from "../lib/api"; // <-- NEW: typed helper that injects Authorization
 import MakeOfferModal from "../components/MakeOfferModal";
 import CheckoutModal from "../components/CheckoutModal";
 
@@ -184,42 +185,32 @@ export default function ArtworkDetail() {
   async function handleBuyClick() {
     try {
       if (listingId) { setShowCheckout(true); return; }
-      const body = {
-        artwork_id: art.id,
-        lister: art.owner,
-        price: art.sale_price,
-        // send currency only if you have it
-        ...(art.sale_currency ? { currency: art.sale_currency } : {}),
-      };
-      const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/listings/create`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
 
-      if (!r.ok) {
-        let msg = `Create listing failed (${r.status})`;
-        try {
-          const j = await r.json();
-          if (j?.attempts?.length) {
-            console.error("[listings/create] attempts:", j.attempts);
-            msg = `Create listing failed: Insert failed. Tried variants A, B, C.\n\n${j.attempts.join(
-              "\n"
-            )}`;
-          } else if (j?.error) {
-            msg = `Create listing failed: ${j.error}`;
-          }
-        } catch { /* ignore parse error */ }
-        alert(msg);
+      // Ensure user is logged in (so apiFetch has a token to send)
+      const { data: sess } = await supabase.auth.getSession();
+      if (!sess?.session) {
+        alert("Please log in to list this item.");
         return;
       }
 
-      const j = await r.json();
+      // Server will infer lister/seller from the JWT — don't send them.
+      const payload: Record<string, any> = {
+        artwork_id: art.id,
+        price: art.sale_price,
+      };
+      if (art.sale_currency) payload.currency = art.sale_currency;
+
+      const j = await apiFetch("/api/listings/create", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+
       const created = j?.listing as Listing | undefined;
       if (created) setListing(created);
       setShowCheckout(true);
-    } catch (e) {
-      alert(String(e));
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      alert(`Create listing failed: ${msg}`);
       console.error(e);
     }
   }
