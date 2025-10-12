@@ -74,40 +74,34 @@ async function getUserFromRequest(req) {
   }
 }
 
-// Helper: resilient listing status update (handles missing updated_at)
-async function safeSetListingStatus(listingId, status, extra = {}) {
-  // Try with updated_at first
-  let { data, error } = await sbAdmin
-    .from("listings")
-    .update({ status, updated_at: new Date().toISOString(), ...extra })
-    .eq("id", listingId)
-    .select("*")
-    .single();
-
-  // If updated_at column doesn't exist, retry without it
-  const msg = ((error?.message || "") + " " + (error?.details || "")).toLowerCase();
-  const missingCol = error?.code === "42703" || msg.includes('column "updated_at" does not exist');
-
-  if (error && missingCol) {
-    const r2 = await sbAdmin
-      .from("listings")
-      .update({ status, ...extra })
-      .eq("id", listingId)
-      .select("*")
-      .single();
-    data = r2.data;
-    error = r2.error;
-  }
-
-  if (error) throw error;
-  return data;
+// ------------------------------------------------------------------
+// Checkout (safe mounting)
+// ------------------------------------------------------------------
+let checkout = null;
+try {
+  // Must export { router, webhook } from server/checkout.cjs
+  // e.g. module.exports = { router, webhook }
+  // This try/catch prevents crashes if the file is missing or mis-exported.
+  // eslint-disable-next-line import/no-dynamic-require, global-require
+  checkout = require(path.join(__dirname, "checkout.cjs"));
+  console.log("[checkout] module loaded:", {
+    hasRouter: !!checkout?.router,
+    hasWebhook: typeof checkout?.webhook === "function",
+  });
+} catch (e) {
+  console.warn("[checkout] not mounted:", e?.message || e);
 }
 
-// ------------------------------------------------------------------
-// Stripe routes (webhook needs raw body BEFORE json())
-// ------------------------------------------------------------------
-const checkout = require(path.join(__dirname, "checkout.cjs"));
-app.post("/api/checkout/webhook", express.raw({ type: "application/json" }), checkout.webhook);
+// Mount webhook BEFORE json() (requires raw body)
+if (checkout && typeof checkout.webhook === "function") {
+  app.post(
+    "/api/checkout/webhook",
+    express.raw({ type: "application/json" }),
+    checkout.webhook
+  );
+} else {
+  console.warn("[checkout] webhook not available — skipping /api/checkout/webhook");
+}
 
 // Enable JSON for normal routes
 app.use(express.json());
@@ -118,8 +112,20 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 // Simple verify (avoid 404s during create flow)
 app.post("/api/verify", (_req, res) => res.json({ similar: [] }));
 
-// Stripe/Crypto API
-app.use("/api/checkout", checkout.router);
+// Mount checkout router if present
+if (checkout && checkout.router) {
+  app.use("/api/checkout", checkout.router);
+} else {
+  console.warn("[checkout] router not available — mounting fallback /api/checkout/session");
+
+  // Minimal fallback for your success page:
+  app.get("/api/checkout/session", async (req, res) => {
+    // In a real flow, you would call Stripe here to retrieve/verify the session.
+    // This fallback just returns ok so the UI doesn't 404.
+    const sid = req.query.sid || "";
+    return res.json({ ok: true, sid });
+  });
+}
 
 // Mount market routes if present (optional)
 try {
@@ -317,7 +323,13 @@ app.post("/api/listings/cancel", async (req, res) => {
     const canCancel = [lst0.lister, lst0.seller, art0?.owner].includes(user.id);
     if (!canCancel) return res.status(403).json({ error: "Forbidden" });
 
-    const lst = await safeSetListingStatus(listing_id, "cancelled");
+    const { data: lst, error } = await sbAdmin
+      .from("listings")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .eq("id", listing_id)
+      .select("*")
+      .single();
+    if (error) throw error;
 
     await sbAdmin.from("activity").insert({
       artwork_id: lst.artwork_id,
@@ -342,7 +354,13 @@ app.post("/api/listings/fill", async (req, res) => {
     const { listing_id, tx_hash } = req.body || {};
     if (!listing_id) return res.status(400).json({ error: "Missing listing_id" });
 
-    const lst = await safeSetListingStatus(listing_id, "filled");
+    const { data: lst, error: e1 } = await sbAdmin
+      .from("listings")
+      .update({ status: "filled", updated_at: new Date().toISOString() })
+      .eq("id", listing_id)
+      .select("*")
+      .single();
+    if (e1) throw e1;
 
     await sbAdmin.from("activity").insert({
       artwork_id: lst.artwork_id,
