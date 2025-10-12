@@ -11,39 +11,33 @@ const { createClient } = require("@supabase/supabase-js");
 const { dhash64, sha256Hex } = require("./utils/similarity.cjs");
 
 const app = express();
+app.set("trust proxy", 1);
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 },
 });
 
-// ------------------------------------------------------------------
-// Config
-// ------------------------------------------------------------------
-const PORT = Number(process.env.PORT || 5000);
+// ----------------------------- Config -----------------------------
+const HOST = "0.0.0.0";
+const PORT = Number(process.env.PORT) || 5000; // Render injects PORT; 5000 for local dev
+
 const PINATA_JWT = process.env.PINATA_JWT || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
-// Public client (used only for verifying a passed JWT)
-const sb =
-  SUPABASE_URL && SUPABASE_ANON_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      })
-    : null;
+// Public client (only to resolve a passed JWT)
+const sb = SUPABASE_URL && SUPABASE_ANON_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
+  : null;
 
-// Admin client (bypasses RLS — use carefully)
-const sbAdmin =
-  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      })
-    : null;
+// Admin client (bypasses RLS)
+const sbAdmin = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
+  : null;
 
-// ------------------------------------------------------------------
-// CORS (permissive + preflight with Authorization allowed)
-// ------------------------------------------------------------------
+// ----------------------------- CORS & logs -----------------------------
 const corsCfg = {
   origin: (_origin, cb) => cb(null, true),
   credentials: false,
@@ -59,7 +53,7 @@ app.use((req, _res, next) => {
   next();
 });
 
-// Tiny auth helper: read Bearer token and resolve the Supabase user
+// Resolve user from Authorization: Bearer <jwt>
 async function getUserFromRequest(req) {
   try {
     if (!sb) return null;
@@ -74,17 +68,11 @@ async function getUserFromRequest(req) {
   }
 }
 
-// ------------------------------------------------------------------
-// Checkout (safe mounting)
-// ------------------------------------------------------------------
+// ----------------------------- Checkout (safe mount) -----------------------------
 let checkout = null;
 try {
-  // Must export { router, webhook } from server/checkout.cjs
-  // e.g. module.exports = { router, webhook }
-  // This try/catch prevents crashes if the file is missing or mis-exported.
-  // eslint-disable-next-line import/no-dynamic-require, global-require
   checkout = require(path.join(__dirname, "checkout.cjs"));
-  console.log("[checkout] module loaded:", {
+  console.log("[checkout] loaded:", {
     hasRouter: !!checkout?.router,
     hasWebhook: typeof checkout?.webhook === "function",
   });
@@ -92,65 +80,41 @@ try {
   console.warn("[checkout] not mounted:", e?.message || e);
 }
 
-// Mount webhook BEFORE json() (requires raw body)
+// Webhook BEFORE json() (needs raw body)
 if (checkout && typeof checkout.webhook === "function") {
-  app.post(
-    "/api/checkout/webhook",
-    express.raw({ type: "application/json" }),
-    checkout.webhook
-  );
+  app.post("/api/checkout/webhook", express.raw({ type: "application/json" }), checkout.webhook);
 } else {
-  console.warn("[checkout] webhook not available — skipping /api/checkout/webhook");
+  console.warn("[checkout] webhook missing — skipping /api/checkout/webhook");
 }
 
-// Enable JSON for normal routes
+// Normal JSON after webhook
 app.use(express.json());
 
 // Health
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-// Simple verify (avoid 404s during create flow)
+// Simple verify (used by create flow)
 app.post("/api/verify", (_req, res) => res.json({ similar: [] }));
 
-// Mount checkout router if present
-if (checkout && checkout.router) {
+// Mount checkout router or install fallbacks (avoid 404s)
+if (checkout?.router) {
   app.use("/api/checkout", checkout.router);
 } else {
-  console.warn("[checkout] router not available — mounting fallback /api/checkout/session");
-
-  // Minimal fallback for your success page:
-  app.get("/api/checkout/session", async (req, res) => {
-    // In a real flow, you would call Stripe here to retrieve/verify the session.
-    // This fallback just returns ok so the UI doesn't 404.
-    const sid = req.query.sid || "";
-    return res.json({ ok: true, sid });
-  });
+  console.warn("[checkout] router missing — installing fallbacks");
+  app.get("/api/checkout/session", (req, res) => res.json({ ok: true, sid: String(req.query.sid || "") }));
+  app.post("/api/checkout/create-stripe-session", (_req, res) => res.status(501).json({ error: "Stripe not configured" }));
+  app.post("/api/checkout/create-crypto-intent", (_req, res) => res.status(501).json({ error: "Crypto checkout not configured" }));
 }
 
-// Mount market routes if present (optional)
-try {
-  const marketRouter = require(path.join(__dirname, "routes", "market.cjs"));
-  app.use("/api/market", marketRouter);
-} catch (e) {
-  console.warn("[market] routes not mounted:", e?.message || e);
-}
-
-// ------------------------------------------------------------------
-// Pinata: pin file
-// ------------------------------------------------------------------
+// ----------------------------- Pinata -----------------------------
 app.post("/api/pinata/pin-file", upload.single("file"), async (req, res) => {
   try {
     if (!PINATA_JWT) return res.status(500).json({ error: "Server misconfigured: PINATA_JWT missing" });
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
     const form = new FormData();
-    form.append("file", req.file.buffer, {
-      filename: req.file.originalname,
-      contentType: req.file.mimetype,
-    });
-
-    const name = (req.body?.name || req.file.originalname || "upload").slice(0, 80);
-    form.append("pinataMetadata", JSON.stringify({ name }));
+    form.append("file", req.file.buffer, { filename: req.file.originalname, contentType: req.file.mimetype });
+    form.append("pinataMetadata", JSON.stringify({ name: (req.body?.name || req.file.originalname || "upload").slice(0, 80) }));
     form.append("pinataOptions", JSON.stringify({ cidVersion: 1 }));
 
     const { data } = await axios.post("https://api.pinata.cloud/pinning/pinFileToIPFS", form, {
@@ -159,40 +123,26 @@ app.post("/api/pinata/pin-file", upload.single("file"), async (req, res) => {
     });
 
     const cid = data.IpfsHash;
-    res.json({
-      cid,
-      ipfsUri: `ipfs://${cid}`,
-      gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}`,
-    });
+    res.json({ cid, ipfsUri: `ipfs://${cid}`, gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}` });
   } catch (err) {
     console.error("[pin-file] error", err?.response?.data || err.message);
     res.status(500).json({ error: "Pinning failed", details: err?.response?.data || err.message });
   }
 });
 
-// ------------------------------------------------------------------
-// Pinata: pin metadata
-// ------------------------------------------------------------------
 app.post("/api/metadata", async (req, res) => {
   try {
     if (!PINATA_JWT) return res.status(500).json({ error: "Server misconfigured: PINATA_JWT missing" });
 
     const p = req.body || {};
     const image =
-      typeof p.image === "string" && p.image.trim()
-        ? p.image.trim()
-        : p.imageCid
-        ? `ipfs://${p.imageCid}`
-        : undefined;
+      (typeof p.image === "string" && p.image.trim()) ? p.image.trim()
+      : p.imageCid ? `ipfs://${p.imageCid}` : undefined;
 
     const animation_url =
-      typeof p.animation_url === "string" && p.animation_url.trim()
-        ? p.animation_url.trim()
-        : typeof p.animationUrl === "string" && p.animationUrl.trim()
-        ? p.animationUrl.trim()
-        : p.animationCid
-        ? `ipfs://${p.animationCid}`
-        : undefined;
+      (typeof p.animation_url === "string" && p.animation_url.trim()) ? p.animation_url.trim()
+      : (typeof p.animationUrl === "string" && p.animationUrl.trim()) ? p.animationUrl.trim()
+      : p.animationCid ? `ipfs://${p.animationCid}` : undefined;
 
     const meta = {
       name: String(p.name || "Untitled"),
@@ -208,38 +158,25 @@ app.post("/api/metadata", async (req, res) => {
     });
 
     const cid = data.IpfsHash;
-    res.json({
-      metadata_cid: cid,
-      metadata_url: `ipfs://${cid}`,
-      ipfsUri: `ipfs://${cid}`,
-      gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}`,
-    });
+    res.json({ metadata_cid: cid, metadata_url: `ipfs://${cid}`, ipfsUri: `ipfs://${cid}`, gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}` });
   } catch (err) {
     console.error("[metadata] error", err?.response?.data || err.message);
     res.status(500).json({ error: "Pin JSON failed", details: err?.response?.data || err.message });
   }
 });
 
-// ------------------------------------------------------------------
-// Hashes
-// ------------------------------------------------------------------
+// ----------------------------- Hashes -----------------------------
 app.post("/api/hashes", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.json({ dhash64: null, sha256: null, note: "no file" });
-
     const buf = req.file.buffer;
     const mime = req.file.mimetype || "";
     const sha = sha256Hex(buf);
 
     let dhash = null;
     if (mime.startsWith("image/")) {
-      try {
-        dhash = await dhash64(buf);
-      } catch (e) {
-        console.warn("[hashes] dHash failed:", e?.message || e);
-      }
+      try { dhash = await dhash64(buf); } catch (e) { console.warn("[hashes] dHash failed:", e?.message || e); }
     }
-
     res.json({ dhash64: dhash, sha256: sha });
   } catch (e) {
     console.error("[hashes] unexpected:", e);
@@ -247,33 +184,22 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
   }
 });
 
-// ------------------------------------------------------------------
-// Listings API — server-authoritative, tolerant to schema variants
-// ------------------------------------------------------------------
+// ----------------------------- Listings -----------------------------
 app.post("/api/listings/create", async (req, res) => {
   try {
     if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
 
-    // 1) Auth: the caller must be a signed-in user
     const user = await getUserFromRequest(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-    // 2) Validate payload
     const { artwork_id, price, currency = "ETH" } = req.body || {};
     if (!artwork_id || !price) return res.status(400).json({ error: "Missing artwork_id or price" });
 
-    // 3) Enforce ownership: only the artwork owner can list
-    const { data: art, error: artErr } = await sbAdmin
-      .from("artworks")
-      .select("id, owner, status")
-      .eq("id", artwork_id)
-      .single();
+    const { data: art, error: artErr } = await sbAdmin.from("artworks").select("id, owner, status").eq("id", artwork_id).single();
     if (artErr) return res.status(404).json({ error: "Artwork not found" });
     if (art.owner !== user.id) return res.status(403).json({ error: "Forbidden (not the owner)" });
 
-    // 4) Try several column variants (covers lister/seller & price/price_eth differences)
     const attempts = [];
-
     async function tryInsert(name, cols) {
       const { data, error } = await sbAdmin.from("listings").insert(cols).select("*").single();
       if (error) {
@@ -311,12 +237,8 @@ app.post("/api/listings/cancel", async (req, res) => {
     const { listing_id } = req.body || {};
     if (!listing_id) return res.status(400).json({ error: "Missing listing_id" });
 
-    // ensure actor is owner/lister
     const { data: lst0, error: e0 } = await sbAdmin
-      .from("listings")
-      .select("id, artwork_id, lister, seller, status")
-      .eq("id", listing_id)
-      .single();
+      .from("listings").select("id, artwork_id, lister, seller, status").eq("id", listing_id).single();
     if (e0 || !lst0) return res.status(404).json({ error: "Listing not found" });
 
     const { data: art0 } = await sbAdmin.from("artworks").select("owner").eq("id", lst0.artwork_id).single();
@@ -324,18 +246,11 @@ app.post("/api/listings/cancel", async (req, res) => {
     if (!canCancel) return res.status(403).json({ error: "Forbidden" });
 
     const { data: lst, error } = await sbAdmin
-      .from("listings")
-      .update({ status: "cancelled", updated_at: new Date().toISOString() })
-      .eq("id", listing_id)
-      .select("*")
-      .single();
+      .from("listings").update({ status: "cancelled", updated_at: new Date().toISOString() }).eq("id", listing_id).select("*").single();
     if (error) throw error;
 
     await sbAdmin.from("activity").insert({
-      artwork_id: lst.artwork_id,
-      kind: "cancel_list",
-      actor: user.id,
-      note: "Listing cancelled",
+      artwork_id: lst.artwork_id, kind: "cancel_list", actor: user.id, note: "Listing cancelled",
     });
 
     res.json({ ok: true, listing: lst });
@@ -355,18 +270,11 @@ app.post("/api/listings/fill", async (req, res) => {
     if (!listing_id) return res.status(400).json({ error: "Missing listing_id" });
 
     const { data: lst, error: e1 } = await sbAdmin
-      .from("listings")
-      .update({ status: "filled", updated_at: new Date().toISOString() })
-      .eq("id", listing_id)
-      .select("*")
-      .single();
+      .from("listings").update({ status: "filled", updated_at: new Date().toISOString() }).eq("id", listing_id).select("*").single();
     if (e1) throw e1;
 
     await sbAdmin.from("activity").insert({
-      artwork_id: lst.artwork_id,
-      kind: "buy",
-      actor: user.id,
-      tx_hash,
+      artwork_id: lst.artwork_id, kind: "buy", actor: user.id, tx_hash,
       note: `Bought for ${lst.price ?? lst.price_eth} ${lst.currency || "ETH"}`,
     });
 
@@ -377,7 +285,7 @@ app.post("/api/listings/fill", async (req, res) => {
   }
 });
 
-// Debug endpoint (optional)
+// Debug
 app.get("/api/_debug/supabase", (_req, res) => {
   res.json({
     hasUrl: !!process.env.SUPABASE_URL,
@@ -386,7 +294,11 @@ app.get("/api/_debug/supabase", (_req, res) => {
   });
 });
 
-// ------------------------------------------------------------------
-app.listen(PORT, () => {
-  console.log(`API server listening on http://localhost:${PORT}`);
+// ----------------------------- Listen -----------------------------
+const server = app.listen(PORT, HOST, () => {
+  console.log(`API server listening on http://${HOST}:${PORT}`);
+});
+server.on("error", (err) => {
+  console.error("[listen] error", err);
+  process.exit(1);
 });
