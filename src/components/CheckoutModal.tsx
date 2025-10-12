@@ -18,19 +18,11 @@ type Props = {
 };
 
 type Method = "card" | "crypto";
-
 const STRIPE_PK = import.meta.env.VITE_STRIPE_PUBKEY as string | undefined;
 
 export default function CheckoutModal({
-  open,
-  onClose,
-  onPurchased,
-  artworkId,
-  listingId,
-  title,
-  price,
-  currency,
-  imageUrl,
+  open, onClose, onPurchased,
+  artworkId, listingId, title, price, currency, imageUrl,
 }: Props) {
   const { toast } = useToast();
   const [method, setMethod] = useState<Method>("card");
@@ -41,24 +33,35 @@ export default function CheckoutModal({
     return `${price} ${currency}`;
   }, [price, currency]);
 
+  const isCardEnabled = String(currency).toUpperCase() === "USD";
+
   if (!open) return null;
 
   async function handleCardCheckout() {
     try {
-      setBusy(true);
+      if (!isCardEnabled) {
+        toast({ variant: "error", title: "Card checkout requires USD price" });
+        return;
+      }
 
+      setBusy(true);
       const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/checkout/create-stripe-session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ artworkId, listingId, title, price, currency, imageUrl }),
       });
-      if (!r.ok) throw new Error(`Failed (${r.status})`);
-      const { url, sessionId } = await r.json();
 
-      if (url) {
-        window.location.href = url;
-        return;
+      if (!r.ok) {
+        let msg = `Failed (${r.status})`;
+        try {
+          const j = await r.json();
+          if (j?.error) msg = j.error;
+        } catch {}
+        throw new Error(msg);
       }
+
+      const { url, sessionId } = await r.json();
+      if (url) { window.location.href = url; return; }
 
       if (!STRIPE_PK || !sessionId) throw new Error("No checkout session available");
       const stripe = await loadStripe(STRIPE_PK);
@@ -66,11 +69,7 @@ export default function CheckoutModal({
       const { error } = await (stripe as any).redirectToCheckout({ sessionId });
       if (error) throw error;
     } catch (e: any) {
-      toast({
-        variant: "error",
-        title: "Card checkout failed",
-        description: String(e?.message || e),
-      });
+      toast({ variant: "error", title: "Card checkout failed", description: String(e?.message || e) });
       setBusy(false);
     }
   }
@@ -98,11 +97,7 @@ export default function CheckoutModal({
 
       window.location.href = hostedUrl;
     } catch (e: any) {
-      toast({
-        variant: "error",
-        title: "Crypto checkout failed",
-        description: String(e?.message || e),
-      });
+      toast({ variant: "error", title: "Crypto checkout failed", description: String(e?.message || e) });
       setBusy(false);
     }
   }
@@ -144,34 +139,31 @@ export default function CheckoutModal({
           <button
             className={`rounded-full border px-3 py-1 text-sm ${method === "card" ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"}`}
             onClick={() => setMethod("card")}
-          >
-            Card / Apple Pay
-          </button>
+          >Card / Apple Pay</button>
           <button
             className={`rounded-full border px-3 py-1 text-sm ${method === "crypto" ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"}`}
             onClick={() => setMethod("crypto")}
-          >
-            Crypto
-          </button>
+          >Crypto</button>
         </div>
 
         {method === "card" ? (
           <div className="space-y-3 p-4 text-sm">
             <div className="text-neutral-300">Pay securely with Stripe Checkout.</div>
             <button
-              disabled={busy}
+              disabled={busy || !isCardEnabled}
               onClick={handleCardCheckout}
               className="w-full rounded-xl bg-white px-4 py-2 font-medium text-black disabled:opacity-60"
-            >
-              Continue to Stripe
-            </button>
+            >Continue to Stripe</button>
+            {!isCardEnabled && (
+              <div className="text-xs text-neutral-500">
+                Card checkout is available only for USD listings.
+              </div>
+            )}
             <button
               disabled={busy}
               onClick={simulateSuccess}
               className="w-full rounded-xl border border-neutral-700 px-4 py-2 hover:bg-neutral-900"
-            >
-              Simulate success (local)
-            </button>
+            >Simulate success (local)</button>
           </div>
         ) : (
           <div className="space-y-3 p-4 text-sm">
@@ -180,16 +172,12 @@ export default function CheckoutModal({
               disabled={busy}
               onClick={handleCryptoCheckout}
               className="w-full rounded-xl bg-white px-4 py-2 font-medium text-black disabled:opacity-60"
-            >
-              Continue to Crypto Checkout
-            </button>
+            >Continue to Crypto Checkout</button>
             <button
               disabled={busy}
               onClick={simulateSuccess}
               className="w-full rounded-xl border border-neutral-700 px-4 py-2 hover:bg-neutral-900"
-            >
-              Simulate success (local)
-            </button>
+            >Simulate success (local)</button>
           </div>
         )}
 

@@ -6,7 +6,6 @@ type Props = {
   open: boolean;
   onClose: () => void;
   onPurchased?: () => Promise<void> | void;
-  // minimal props to describe the thing being bought
   artworkId: string;
   listingId: string;
   title: string;
