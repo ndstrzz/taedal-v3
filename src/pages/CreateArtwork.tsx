@@ -230,6 +230,7 @@ export default function CreateArtwork() {
     try {
       const { data, error } = await supabase.from("artworks").insert({
         owner: user.id,
+        creator: user.id, // NEW: record creator for provenance
         title: title.trim() || "Untitled",
         description: description.trim() || null,
         cover_url: posterUrl || DEFAULT_COVER_URL,
@@ -262,6 +263,7 @@ export default function CreateArtwork() {
         .from("artworks")
         .insert({
           owner: user!.id,
+          creator: user!.id, // NEW: record creator for provenance
           title: title.trim(),
           description: description.trim(),
           cover_url: pendingCoverUrl || DEFAULT_COVER_URL,

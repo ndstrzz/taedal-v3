@@ -61,7 +61,8 @@ async function getUserFromRequest(req) {
   try {
     if (!sb) return null;
     const auth = req.headers.authorization || "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+    theToken = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+    const token = theToken;
     if (!token) return null;
     const { data, error } = await sb.auth.getUser(token);
     if (error || !data?.user) return null;

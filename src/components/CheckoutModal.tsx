@@ -45,7 +45,6 @@ export default function CheckoutModal({
 
   if (!open) return null;
 
-  // ---- UPDATED: send exactly what the server expects ----
   async function handleCardCheckout() {
     try {
       if (!isCardEnabled) {
@@ -55,22 +54,15 @@ export default function CheckoutModal({
 
       setBusy(true);
 
-      // Build body for server:
-      // - if there is an existing listing, send { listing_id }
-      // - otherwise send a direct amount checkout { amount, currency, name }
       let body: any;
       if (listingId) {
-        body = { listing_id: listingId }; // snake_case key required by server
+        body = { listing_id: listingId }; // what the server expects
       } else {
         const amountNum = Number(price);
         if (!Number.isFinite(amountNum) || amountNum <= 0) {
           throw new Error("Invalid amount");
         }
-        body = {
-          amount: amountNum,        // in dollars; server converts to cents
-          currency: "usd",          // lowercase for Stripe
-          name: title ?? "buy",
-        };
+        body = { amount: amountNum, currency: "usd", name: title ?? "buy" };
       }
 
       const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/checkout/create-stripe-session`, {
@@ -91,13 +83,11 @@ export default function CheckoutModal({
 
       const json = await r.json();
 
-      // Prefer URL (Stripe-hosted checkout)
       if (json?.url) {
         window.location.assign(json.url);
         return;
       }
 
-      // Fallback to sessionId flow if your server returns it
       const sessionId = json?.sessionId || json?.id;
       if (!STRIPE_PK || !sessionId) throw new Error("No checkout URL or sessionId returned");
       const stripe = await loadStripe(STRIPE_PK);

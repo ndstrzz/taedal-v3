@@ -45,10 +45,7 @@ router.get("/health", (_req, res) => {
  * 1) Existing listing:
  *    { "listing_id": "uuid" }
  *
- *    - We look up the listing in Supabase (server-authoritative),
- *      verify it's active and USD, and charge its price.
- *
- * 2) Direct amount (no listing created yet):
+ * 2) Direct amount (no listing yet):
  *    {
  *      "amount": 12,          // dollars (NOT cents)
  *      "currency": "usd",     // must be "usd" for card

@@ -4,7 +4,8 @@ import { useParams, Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { ipfsToHttp } from "../lib/ipfs-url";
 import { DEFAULT_COVER_URL } from "../lib/config";
-import { apiFetch } from "../lib/api"; // <-- NEW: typed helper that injects Authorization
+import { apiFetch } from "../lib/api";
+import { useAuth } from "../state/AuthContext";             // <-- NEW
 import MakeOfferModal from "../components/MakeOfferModal";
 import CheckoutModal from "../components/CheckoutModal";
 
@@ -13,6 +14,7 @@ type Metadata = { name?: string; description?: string; image?: string; animation
 
 type Artwork = {
   id: string; title: string | null; description: string | null; owner: string | null;
+  creator?: string | null;
   cover_url: string | null; image_cid: string | null; animation_cid: string | null;
   metadata_url: string | null; token_id: string | null; tx_hash: string | null;
   media_kind: "image" | "video" | null; royalty_bps: number | null;
@@ -59,6 +61,7 @@ function formatPrice(val: string | number, currency: "ETH" | "WETH" | "USD"): st
 
 export default function ArtworkDetail() {
   const { id } = useParams<{ id: string }>();
+  const { user } = useAuth();                                    // <-- NEW
 
   const [art, setArt] = useState<Artwork | null>(null);
   const [meta, setMeta] = useState<Metadata | null>(null);
@@ -170,6 +173,8 @@ export default function ArtworkDetail() {
   if (err) return <div className="p-6 text-red-400">Error: {err}</div>;
   if (!art) return <div className="p-6 text-neutral-400">Artwork not found.</div>;
 
+  const isOwner = Boolean(user?.id && art.owner && user.id === art.owner); // <-- NEW
+
   const title = art.title || meta?.name || "Untitled";
   const desc = art.description || meta?.description || "";
   const royaltyPct = ((art.royalty_bps || 0) / 100).toFixed(2);
@@ -180,39 +185,27 @@ export default function ArtworkDetail() {
   const currentCurrency = (listing?.currency || art.sale_currency || "ETH") as "ETH" | "WETH" | "USD";
   const displayPrice = currentPrice ? formatPrice(currentPrice, currentCurrency) : null;
 
-  const canBuy = Boolean((listingId && currentPrice) || (!listingId && art.sale_kind === "fixed" && art.sale_price));
+  const canBuy = !isOwner && Boolean(listingId && currentPrice); // <-- only non-owners with active listing can buy
 
-  async function handleBuyClick() {
+  async function ownerListForSaleUSD() {
     try {
-      if (listingId) { setShowCheckout(true); return; }
-
-      // Ensure user is logged in (so apiFetch has a token to send)
-      const { data: sess } = await supabase.auth.getSession();
-      if (!sess?.session) {
-        alert("Please log in to list this item.");
-        return;
-      }
-
-      // Server will infer lister/seller from the JWT — don't send them.
-      const payload: Record<string, any> = {
-        artwork_id: art.id,
-        price: art.sale_price,
-      };
-      if (art.sale_currency) payload.currency = art.sale_currency;
-
+      if (!user?.id) { alert("Please log in."); return; }
       const j = await apiFetch("/api/listings/create", {
         method: "POST",
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          artwork_id: art.id,
+          price: 123,              // placeholder; replace with UI later
+          currency: "USD",
+        }),
       });
-
-      const created = j?.listing as Listing | undefined;
-      if (created) setListing(created);
-      setShowCheckout(true);
+      setListing(j?.listing || null);
     } catch (e: any) {
-      const msg = e?.message || String(e);
-      alert(`Create listing failed: ${msg}`);
-      console.error(e);
+      alert(`Create listing failed: ${e?.message || e}`);
     }
+  }
+
+  async function handleBuyClick() {
+    setShowCheckout(true);
   }
 
   return (
@@ -258,10 +251,18 @@ export default function ArtworkDetail() {
             ) : null}
 
             <div className="mt-3 flex gap-2">
-              <button className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
-                disabled={!canBuy} onClick={handleBuyClick}>
-                Buy now
-              </button>
+              {!isOwner && (
+                <button className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
+                  disabled={!canBuy} onClick={handleBuyClick}>
+                  Buy now
+                </button>
+              )}
+              {isOwner && !listingId && (
+                <button className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
+                  onClick={ownerListForSaleUSD}>
+                  List for sale (USD)
+                </button>
+              )}
               <button className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
                 onClick={() => setShowOffer(true)}>
                 Make offer
@@ -374,7 +375,7 @@ export default function ArtworkDetail() {
       </div>
 
       {/* Modals */}
-      {showCheckout && (listing || art.sale_kind === "fixed") && (
+      {showCheckout && listing && (
         <CheckoutModal
           open={showCheckout}
           onClose={() => setShowCheckout(false)}
