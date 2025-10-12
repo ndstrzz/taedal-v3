@@ -8,69 +8,25 @@ import MakeOfferModal from "../components/MakeOfferModal";
 import CheckoutModal from "../components/CheckoutModal";
 
 type Attribute = { trait_type: string; value: string | number };
-type Metadata = {
-  name?: string;
-  description?: string;
-  image?: string;
-  animation_url?: string;
-  attributes?: Attribute[];
-};
+type Metadata = { name?: string; description?: string; image?: string; animation_url?: string; attributes?: Attribute[]; };
 
 type Artwork = {
-  id: string;
-  title: string | null;
-  description: string | null;
-  owner: string | null;
-  cover_url: string | null;
-  image_cid: string | null;
-  animation_cid: string | null;
-  metadata_url: string | null;
-  token_id: string | null;
-  tx_hash: string | null;
-  media_kind: "image" | "video" | null;
-  royalty_bps: number | null;
-  sale_kind: "fixed" | "auction" | null;
-  sale_price: string | null;
-  sale_currency: "ETH" | "WETH" | "USD" | null;
-  created_at: string;
+  id: string; title: string | null; description: string | null; owner: string | null;
+  cover_url: string | null; image_cid: string | null; animation_cid: string | null;
+  metadata_url: string | null; token_id: string | null; tx_hash: string | null;
+  media_kind: "image" | "video" | null; royalty_bps: number | null;
+  sale_kind: "fixed" | "auction" | null; sale_price: string | null;
+  sale_currency: "ETH" | "WETH" | "USD" | null; created_at: string;
 };
 
 type Listing = {
-  artwork_id: string;
-  listing_id?: string;
-  id?: string;
-  lister: string | null;
-  status: "active" | "cancelled" | "filled";
-  price: string | null;
-  currency: string | null;
-  created_at: string;
+  id?: string; listing_id?: string; artwork_id: string; lister: string | null;
+  seller?: string | null; price?: string | null; price_eth?: string | null;
+  currency?: string | null; status: "active" | "cancelled" | "filled"; created_at: string;
 };
-
-type TraitStat = {
-  trait_type: string;
-  value: string;
-  count: number;
-  total: number;
-  freq: number;
-};
-
-type Act = {
-  id: string;
-  kind: "mint" | "list" | "sale" | "bid" | "transfer" | "buy" | "cancel_list";
-  tx_hash: string | null;
-  price_eth: string | number | null;
-  actor: string | null;
-  created_at: string;
-};
-
-type BestOffer = {
-  artwork_id: string;
-  offer_id: string;
-  offerer: string;
-  price: string;
-  currency: string;
-  created_at: string;
-};
+type TraitStat = { trait_type: string; value: string; count: number; total: number; freq: number; };
+type Act = { id: string; kind: "mint"|"list"|"sale"|"bid"|"transfer"|"buy"|"cancel_list"; tx_hash: string | null; price_eth: string | number | null; actor: string | null; created_at: string; };
+type BestOffer = { artwork_id: string; offer_id: string; offerer: string; price: string; currency: string; created_at: string; };
 
 function Skeleton() {
   return (
@@ -131,9 +87,7 @@ export default function ArtworkDetail() {
         setLoading(false);
       }
     })();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [id]);
 
   useEffect(() => {
@@ -146,13 +100,9 @@ export default function ArtworkDetail() {
         if (!r.ok) throw new Error(`Metadata HTTP ${r.status}`);
         const j = (await r.json()) as Metadata;
         if (!aborted) setMeta(j || null);
-      } catch {
-        if (!aborted) setMeta(null);
-      }
+      } catch { if (!aborted) setMeta(null); }
     })();
-    return () => {
-      aborted = true;
-    };
+    return () => { aborted = true; };
   }, [art?.metadata_url]);
 
   async function fetchActivity(artworkId: string) {
@@ -163,9 +113,7 @@ export default function ArtworkDetail() {
       .order("created_at", { ascending: false });
     if (data) setActs(data as any);
   }
-  useEffect(() => {
-    if (art?.id) fetchActivity(art.id);
-  }, [art?.id]);
+  useEffect(() => { if (art?.id) fetchActivity(art.id); }, [art?.id]);
 
   useEffect(() => {
     (async () => {
@@ -179,69 +127,37 @@ export default function ArtworkDetail() {
   }, []);
 
   async function fetchListing(artworkId: string) {
-    const viaView = await supabase
-      .from("v_active_listing")
-      .select("*")
-      .eq("artwork_id", artworkId)
-      .maybeSingle();
-    if (viaView.data) {
-      setListing(viaView.data as any);
-      return;
-    }
+    const viaView = await supabase.from("v_active_listing").select("*").eq("artwork_id", artworkId).maybeSingle();
+    if (viaView.data) { setListing(viaView.data as any); return; }
     const fallback = await supabase
-      .from("listings")
-      .select("*")
-      .eq("artwork_id", artworkId)
-      .eq("status", "active")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (fallback.data) setListing(fallback.data as any);
-    else setListing(null);
+      .from("listings").select("*")
+      .eq("artwork_id", artworkId).eq("status", "active")
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (fallback.data) setListing(fallback.data as any); else setListing(null);
   }
-  useEffect(() => {
-    if (id) fetchListing(id);
-  }, [id]);
+  useEffect(() => { if (id) fetchListing(id); }, [id]);
 
   useEffect(() => {
     if (!id) return;
     (async () => {
-      const { data, error } = await supabase
-        .from("v_best_offer")
-        .select("*")
-        .eq("artwork_id", id)
-        .maybeSingle();
-      if (!error && data) setBestOffer(data as any);
-      else setBestOffer(null);
+      const { data, error } = await supabase.from("v_best_offer").select("*").eq("artwork_id", id).maybeSingle();
+      if (!error && data) setBestOffer(data as any); else setBestOffer(null);
     })();
   }, [id]);
 
-  async function refetchAll() {
-    if (!id) return;
-    await Promise.all([fetchListing(id), fetchActivity(id)]);
-  }
+  async function refetchAll() { if (!id) return; await Promise.all([fetchListing(id), fetchActivity(id)]); }
 
   const media = useMemo(() => {
     const poster = art?.cover_url || DEFAULT_COVER_URL;
     if (art?.media_kind === "video") {
-      if (art?.animation_cid)
-        return { kind: "video" as const, poster, src: ipfsToHttp(`ipfs://${art.animation_cid}`) };
-      if (meta?.animation_url)
-        return { kind: "video" as const, poster, src: ipfsToHttp(meta.animation_url) };
+      if (art?.animation_cid) return { kind: "video" as const, poster, src: ipfsToHttp(`ipfs://${art.animation_cid}`) };
+      if (meta?.animation_url) return { kind: "video" as const, poster, src: ipfsToHttp(meta.animation_url) };
       return { kind: "video" as const, poster, src: "" };
     }
-    if (art?.image_cid)
-      return { kind: "image" as const, poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) };
-    if (meta?.image) return { kind: "image" as const, poster, src: ipfsToHttp(meta.image) };
+    if (art?.image_cid) return { kind: "image" as const, poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) };
+    if (meta?.image)    return { kind: "image" as const, poster, src: ipfsToHttp(meta.image) };
     return { kind: "image" as const, poster, src: poster };
-  }, [
-    art?.media_kind,
-    art?.animation_cid,
-    art?.image_cid,
-    art?.cover_url,
-    meta?.animation_url,
-    meta?.image,
-  ]);
+  }, [art?.media_kind, art?.animation_cid, art?.image_cid, art?.cover_url, meta?.animation_url, meta?.image]);
 
   const rarityMap = useMemo(() => {
     const m = new Map<string, TraitStat>();
@@ -256,64 +172,54 @@ export default function ArtworkDetail() {
   const title = art.title || meta?.name || "Untitled";
   const desc = art.description || meta?.description || "";
   const royaltyPct = ((art.royalty_bps || 0) / 100).toFixed(2);
-  const attributes: Attribute[] = Array.isArray(meta?.attributes) ? (meta!.attributes as any) : [];
+  const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
 
   const listingId = (listing?.listing_id || listing?.id || null) as string | null;
-  const currentPrice = listing?.price ?? art.sale_price ?? "";
-  const currentCurrency = (listing?.currency || art.sale_currency || "ETH") as
-    | "ETH"
-    | "WETH"
-    | "USD";
+  const currentPrice = listing?.price ?? listing?.price_eth ?? art.sale_price ?? "";
+  const currentCurrency = (listing?.currency || art.sale_currency || "ETH") as "ETH" | "WETH" | "USD";
   const displayPrice = currentPrice ? formatPrice(currentPrice, currentCurrency) : null;
 
-  const canBuy = Boolean(
-    (listingId && currentPrice) || (!listingId && art.sale_kind === "fixed" && art.sale_price)
-  );
+  const canBuy = Boolean((listingId && currentPrice) || (!listingId && art.sale_kind === "fixed" && art.sale_price));
 
-  // UPDATED: clearer error reporting when creating the listing server-side
   async function handleBuyClick() {
     try {
-      if (listingId) {
-        setShowCheckout(true);
-        return;
-      }
-
+      if (listingId) { setShowCheckout(true); return; }
       const body = {
         artwork_id: art.id,
         lister: art.owner,
         price: art.sale_price,
-        currency: art.sale_currency || "ETH",
+        // send currency only if you have it
+        ...(art.sale_currency ? { currency: art.sale_currency } : {}),
       };
-
-      const url = `${API_BASE.replace(/\/$/, "")}/api/listings/create`;
-      const r = await fetch(url, {
+      const r = await fetch(`${API_BASE.replace(/\/$/, "")}/api/listings/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
 
-      let payload: any = null;
-      try {
-        payload = await r.json();
-      } catch {
-        /* ignore parse errors */
-      }
-
       if (!r.ok) {
-        const msg =
-          (payload && (payload.error || payload.message || payload.details)) ||
-          `HTTP ${r.status}`;
-        alert(`Create listing failed: ${msg}`);
-        console.error("Create listing failed", { status: r.status, payload });
+        let msg = `Create listing failed (${r.status})`;
+        try {
+          const j = await r.json();
+          if (j?.attempts?.length) {
+            console.error("[listings/create] attempts:", j.attempts);
+            msg = `Create listing failed: Insert failed. Tried variants A, B, C.\n\n${j.attempts.join(
+              "\n"
+            )}`;
+          } else if (j?.error) {
+            msg = `Create listing failed: ${j.error}`;
+          }
+        } catch { /* ignore parse error */ }
+        alert(msg);
         return;
       }
 
-      const created = payload?.listing as Listing | undefined;
+      const j = await r.json();
+      const created = j?.listing as Listing | undefined;
       if (created) setListing(created);
-
       setShowCheckout(true);
-    } catch (e: any) {
-      alert(`Create listing threw: ${String(e?.message || e)}`);
+    } catch (e) {
+      alert(String(e));
       console.error(e);
     }
   }
@@ -324,13 +230,7 @@ export default function ArtworkDetail() {
         {/* Media */}
         <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950">
           {media.kind === "video" ? (
-            <video
-              src={media.src}
-              poster={media.poster || undefined}
-              className="h-full w-full"
-              controls
-              playsInline
-            />
+            <video src={media.src} poster={media.poster || undefined} className="h-full w-full" controls playsInline />
           ) : (
             <img
               src={media.src || media.poster}
@@ -353,9 +253,7 @@ export default function ArtworkDetail() {
               <Link to={`/u/${art.owner}`} className="text-neutral-200 hover:underline">
                 {art.owner.slice(0, 6)}…{art.owner.slice(-4)}
               </Link>
-            ) : (
-              "unknown"
-            )}
+            ) : ("unknown")}
           </div>
 
           <div className="mt-4 rounded-2xl border border-neutral-800 p-4">
@@ -364,25 +262,17 @@ export default function ArtworkDetail() {
 
             {bestOffer ? (
               <div className="mt-2 text-sm text-neutral-400">
-                Best offer:{" "}
-                <span className="text-neutral-200">
-                  {bestOffer.price} {bestOffer.currency}
-                </span>
+                Best offer: <span className="text-neutral-200">{bestOffer.price} {bestOffer.currency}</span>
               </div>
             ) : null}
 
             <div className="mt-3 flex gap-2">
-              <button
-                className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
-                disabled={!canBuy}
-                onClick={handleBuyClick}
-              >
+              <button className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
+                disabled={!canBuy} onClick={handleBuyClick}>
                 Buy now
               </button>
-              <button
-                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
-                onClick={() => setShowOffer(true)}
-              >
+              <button className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
+                onClick={() => setShowOffer(true)}>
                 Make offer
               </button>
             </div>
@@ -394,13 +284,9 @@ export default function ArtworkDetail() {
           {/* Tabs */}
           <div className="mt-6 flex gap-2">
             {(["details", "activity"] as const).map((t) => (
-              <button
-                key={t}
-                className={`rounded-full border px-3 py-1 text-sm capitalize ${
-                  tab === t ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"
-                }`}
-                onClick={() => setTab(t)}
-              >
+              <button key={t}
+                className={`rounded-full border px-3 py-1 text-sm capitalize ${tab === t ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"}`}
+                onClick={() => setTab(t)}>
                 {t}
               </button>
             ))}
@@ -420,12 +306,8 @@ export default function ArtworkDetail() {
                 <div className="grid grid-cols-2 gap-2 text-xs text-neutral-400">
                   <div className="rounded-lg border border-neutral-800 p-2">
                     <div className="text-neutral-500">Metadata URI</div>
-                    <a
-                      className="truncate text-neutral-300 hover:underline"
-                      href={ipfsToHttp(art.metadata_url || "")}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
+                    <a className="truncate text-neutral-300 hover:underline"
+                       href={ipfsToHttp(art.metadata_url || "")} target="_blank" rel="noreferrer">
                       {art.metadata_url || "—"}
                     </a>
                   </div>
@@ -444,17 +326,10 @@ export default function ArtworkDetail() {
                 <div className="text-sm text-neutral-400">No activity yet.</div>
               ) : (
                 acts.map((a) => (
-                  <div
-                    key={a.id}
-                    className="flex items-center justify-between rounded-xl border border-neutral-800 p-3 text-sm"
-                  >
+                  <div key={a.id} className="flex items-center justify-between rounded-xl border border-neutral-800 p-3 text-sm">
                     <div className="flex items-center gap-2">
-                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize">
-                        {a.kind}
-                      </span>
-                      <span className="text-neutral-300">
-                        {a.actor ? `${a.actor.slice(0, 6)}…${a.actor.slice(-4)}` : "Someone"}
-                      </span>
+                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize">{a.kind}</span>
+                      <span className="text-neutral-300">{a.actor ? `${a.actor.slice(0, 6)}…${a.actor.slice(-4)}` : "Someone"}</span>
                     </div>
                     <div className="text-right">
                       {a.price_eth ? <div className="text-neutral-200">{a.price_eth} ETH</div> : null}
@@ -484,18 +359,14 @@ export default function ArtworkDetail() {
                 <li key={i} className="rounded-xl border border-neutral-800 p-3">
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="text-xs uppercase tracking-wide text-neutral-500">
-                        {t.trait_type}
-                      </div>
+                      <div className="text-xs uppercase tracking-wide text-neutral-500">{t.trait_type}</div>
                       <div className="text-sm text-neutral-200">{String(t.value)}</div>
                     </div>
                     <div className="text-right">
                       {pct !== null ? (
                         <>
                           <div className="text-xs text-neutral-400">{pct}%</div>
-                          <div className="text-[11px] text-neutral-500">
-                            {s?.count ?? 0} of {s?.total ?? 0}
-                          </div>
+                          <div className="text-[11px] text-neutral-500">{s?.count ?? 0} of {s?.total ?? 0}</div>
                         </>
                       ) : (
                         <div className="text-xs text-neutral-500">—</div>
@@ -522,15 +393,11 @@ export default function ArtworkDetail() {
           title={title}
           price={String(currentPrice)}
           currency={currentCurrency}
-          imageUrl={media.kind === "image" ? media.src || media.poster : media.poster}
+          imageUrl={media.kind === "image" ? (media.src || media.poster) : media.poster}
         />
       )}
       {showOffer && (
-        <MakeOfferModal
-          artworkId={art.id}
-          onClose={() => setShowOffer(false)}
-          onDone={refetchAll}
-        />
+        <MakeOfferModal artworkId={art.id} onClose={() => setShowOffer(false)} onDone={refetchAll} />
       )}
     </div>
   );
