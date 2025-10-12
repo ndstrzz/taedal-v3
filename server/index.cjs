@@ -236,8 +236,7 @@ app.post("/api/listings/create", async (req, res) => {
     if (artErr) return res.status(404).json({ error: "Artwork not found" });
     if (art.owner !== user.id) return res.status(403).json({ error: "Forbidden (not the owner)" });
 
-    // 4) Try several column variants. If your DB has BOTH lister & seller NOT NULL,
-    //    the “both” variants will succeed. If only one exists, the others will.
+    // 4) Try several column variants (covers lister/seller & price/price_eth differences)
     const attempts = [];
 
     async function tryInsert(name, cols) {
@@ -249,12 +248,11 @@ app.post("/api/listings/create", async (req, res) => {
       return data;
     }
 
-    // prefer writing both user columns first (handles NOT NULL on both)
     const variants = [
-      ["A", { artwork_id, lister: user.id, seller: user.id, price, price_eth: price, currency, status: "active" }],
-      ["B", { artwork_id, lister: user.id, price, currency, status: "active" }],
-      ["C", { artwork_id, seller: user.id, price_eth: price, currency, status: "active" }],
-      ["D", { artwork_id, lister: user.id, seller: user.id, price_eth: price, currency, status: "active" }],
+      ["A", { artwork_id, lister: user.id, seller: user.id, price,        price_eth: price, currency, status: "active" }],
+      ["B", { artwork_id, lister: user.id,                  price,                          currency, status: "active" }],
+      ["C", { artwork_id,                 seller: user.id,                 price_eth: price, currency, status: "active" }],
+      ["D", { artwork_id, lister: user.id, seller: user.id,               price_eth: price, currency, status: "active" }],
     ];
 
     for (const [name, cols] of variants) {

@@ -10,6 +10,10 @@ const stripe = STRIPE_SECRET_KEY
 
 const APP_URL = (process.env.APP_URL || "http://localhost:5173").replace(/\/$/, "");
 
+/**
+ * POST /api/checkout/create-stripe-session
+ * Creates a Stripe Checkout Session for a USD payment.
+ */
 router.post("/create-stripe-session", async (req, res) => {
   try {
     if (!stripe) return res.status(500).json({ error: "Stripe not configured on server" });
@@ -52,6 +56,9 @@ router.post("/create-stripe-session", async (req, res) => {
   }
 });
 
+/**
+ * Optional: demo “crypto intent” to keep your UI flows.
+ */
 router.post("/create-crypto-intent", async (req, res) => {
   try {
     const { artworkId, listingId } = req.body || {};
@@ -65,6 +72,40 @@ router.post("/create-crypto-intent", async (req, res) => {
   }
 });
 
+/**
+ * NEW: GET /api/checkout/session?sid=cs_...
+ * Success page calls this to confirm the payment result.
+ */
+router.get("/session", async (req, res) => {
+  try {
+    if (!stripe) return res.status(500).json({ error: "Stripe not configured on server" });
+
+    const sid = String(req.query.sid || "");
+    if (!sid) return res.status(400).json({ error: "Missing sid" });
+
+    const session = await stripe.checkout.sessions.retrieve(sid, {
+      expand: ["payment_intent", "line_items"],
+    });
+
+    // Return a compact, UI-friendly payload
+    res.json({
+      id: session.id,
+      status: session.status,                   // 'complete' | 'open' | ...
+      payment_status: session.payment_status,   // 'paid' | 'unpaid' | 'no_payment_required'
+      amount_total: session.amount_total,
+      currency: session.currency,
+      customer_email: session.customer_details?.email || null,
+      metadata: session.metadata || {},
+    });
+  } catch (e) {
+    // 404 if session is not found/invalid
+    res.status(404).json({ error: e.message || "Session not found" });
+  }
+});
+
+/**
+ * Webhook placeholder (keep raw body in index.cjs before JSON middleware)
+ */
 function webhook(_req, res) {
   res.sendStatus(200);
 }
