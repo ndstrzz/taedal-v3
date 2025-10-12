@@ -1,4 +1,3 @@
-// server/index.cjs
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 
@@ -19,29 +18,23 @@ const upload = multer({
 });
 
 // ----------------------------- Config -----------------------------
-const HOST = "0.0.0.0";
-const PORT = Number(process.env.PORT) || 5000; // Render injects PORT; 5000 for local dev
+const HOST = process.env.HOST || "0.0.0.0";        // Render needs 0.0.0.0
+const PORT = Number(process.env.PORT || 5000);
 
 const PINATA_JWT = process.env.PINATA_JWT || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
-// Public client (only to resolve a passed JWT)
-const sb =
-  SUPABASE_URL && SUPABASE_ANON_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      })
-    : null;
+// public client (only for verifying passed JWT)
+const sb = SUPABASE_URL && SUPABASE_ANON_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
+  : null;
 
-// Admin client (bypasses RLS)
-const sbAdmin =
-  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      })
-    : null;
+// admin client (bypasses RLS — careful)
+const sbAdmin = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
+  : null;
 
 // ----------------------------- CORS & logs -----------------------------
 const corsCfg = {
@@ -59,7 +52,7 @@ app.use((req, _res, next) => {
   next();
 });
 
-// Resolve user from Authorization: Bearer <jwt>
+// auth helper
 async function getUserFromRequest(req) {
   try {
     if (!sb) return null;
@@ -74,10 +67,9 @@ async function getUserFromRequest(req) {
   }
 }
 
-// ----------------------------- Checkout (safe mount) -----------------------------
+// ----------------------------- Checkout (router-only module) -----------------------------
 let checkout = null;
 try {
-  // Must export { router, webhook }
   checkout = require(path.join(__dirname, "checkout.cjs"));
   console.log("[checkout] loaded:", {
     hasRouter: !!checkout?.router,
@@ -87,38 +79,31 @@ try {
   console.warn("[checkout] not mounted:", e?.message || e);
 }
 
-// Webhook BEFORE json() (needs raw body)
+// webhook BEFORE json() (needs raw body)
 if (checkout && typeof checkout.webhook === "function") {
   app.post("/api/checkout/webhook", express.raw({ type: "application/json" }), checkout.webhook);
 } else {
-  console.warn("[checkout] webhook missing — skipping /api/checkout/webhook");
+  console.warn("[checkout] webhook missing — skipping");
 }
 
-// Normal JSON after webhook
+// normal JSON after webhook
 app.use(express.json());
 
 // Health
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-// Simple verify (used by create flow)
+// verify endpoint used during create flow
 app.post("/api/verify", (_req, res) => res.json({ similar: [] }));
 
-// Mount checkout router or install fallbacks (avoid 404s)
+// Mount checkout or provide fallbacks to avoid 404s
 if (checkout?.router) {
   app.use("/api/checkout", checkout.router);
 } else {
   console.warn("[checkout] router missing — installing fallbacks");
+  app.get("/api/checkout/health", (_req, res) => res.json({ ok: true, router: false }));
   app.get("/api/checkout/session", (req, res) => res.json({ ok: true, sid: String(req.query.sid || "") }));
   app.post("/api/checkout/create-stripe-session", (_req, res) => res.status(501).json({ error: "Stripe not configured" }));
   app.post("/api/checkout/create-crypto-intent", (_req, res) => res.status(501).json({ error: "Crypto checkout not configured" }));
-}
-
-// Optional market routes
-try {
-  const marketRouter = require(path.join(__dirname, "routes", "market.cjs"));
-  app.use("/api/market", marketRouter);
-} catch (e) {
-  console.warn("[market] routes not mounted:", e?.message || e);
 }
 
 // ----------------------------- Pinata -----------------------------
@@ -199,7 +184,7 @@ app.post("/api/hashes", upload.single("file"), async (req, res) => {
   }
 });
 
-// ----------------------------- Listings -----------------------------
+// ----------------------------- Listings (server-authoritative) -----------------------------
 app.post("/api/listings/create", async (req, res) => {
   try {
     if (!sbAdmin) return res.status(500).json({ error: "Supabase (admin) not configured" });
@@ -310,19 +295,10 @@ app.get("/api/_debug/supabase", (_req, res) => {
 });
 
 // ----------------------------- Listen -----------------------------
-// server/index.cjs (bottom)
-function start() {
-  if (app._started) return;      // guard
-  app._started = true;
-  const PORT = Number(process.env.PORT) || 5000;
-  const HOST = "0.0.0.0";
-  const server = app.listen(PORT, HOST, () => {
-    console.log(`API server listening on http://${HOST}:${PORT}`);
-  });
-  server.on("error", (err) => {
-    console.error("[listen] error", err);
-    process.exit(1);
-  });
-}
-if (require.main === module) start();
-module.exports = app;
+const server = app.listen(PORT, HOST, () => {
+  console.log(`API server listening on http://${HOST}:${PORT}`);
+});
+server.on("error", (err) => {
+  console.error("[listen] error", err);
+  process.exit(1);
+});
