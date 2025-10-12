@@ -310,7 +310,12 @@ app.get("/api/_debug/supabase", (_req, res) => {
 });
 
 // ----------------------------- Listen -----------------------------
+// server/index.cjs (bottom)
 function start() {
+  if (app._started) return;      // guard
+  app._started = true;
+  const PORT = Number(process.env.PORT) || 5000;
+  const HOST = "0.0.0.0";
   const server = app.listen(PORT, HOST, () => {
     console.log(`API server listening on http://${HOST}:${PORT}`);
   });
@@ -319,6 +324,5 @@ function start() {
     process.exit(1);
   });
 }
-
 if (require.main === module) start();
 module.exports = app;
