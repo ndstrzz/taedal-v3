@@ -57,13 +57,13 @@ async function fetchOwnedPage(userId: string, from: number, to: number) {
     .range(from, to);
 }
 
-/** Page through activity (mint events) for userId, newest first. */
+/** Page through uploads (mint events) for userId, newest first. */
 async function fetchMintedIdsPage(userId: string, from: number, to: number) {
+  // ⬅️ switched to the view so others can read it under RLS
   return await supabase
-    .from("activity")
+    .from("profile_uploads")
     .select("artwork_id,created_at", { count: "exact" })
-    .eq("kind", "mint")
-    .eq("actor", userId)
+    .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .range(from, to);
 }

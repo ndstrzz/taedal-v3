@@ -83,10 +83,9 @@ async function fetchOwnedPage(userId: string, from: number, to: number) {
 /** Fetch a page of the user's minted artwork_ids by paging the activity table */
 async function fetchMintedIdsPage(userId: string, from: number, to: number) {
   return await supabase
-    .from("activity")
+    .from("profile_uploads")
     .select("artwork_id,created_at", { count: "exact" })
-    .eq("kind", "mint")
-    .eq("actor", userId)
+    .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .range(from, to);
 }
