@@ -49,13 +49,11 @@ function toWebUrl(s?: string | null) { if (!s) return null; const t=s.trim(); if
 function toInstagramUrl(s?: string | null) { if (!s) return null; const t=s.trim().replace(/^@/,""); if(!t) return null; if(/^https?:\/\//i.test(t)) return t; return `https://instagram.com/${encodeURIComponent(t)}`; }
 function toTwitterUrl(s?: string | null) { if (!s) return null; const t=s.trim().replace(/^@/,""); if(!t) return null; if(/^https?:\/\//i.test(t)) return t; return `https://twitter.com/${encodeURIComponent(t)}`; }
 
-// ----- creator presence detection
 function looksLikeMissingCreator(err: any) {
   const msg = String(err?.message || err?.hint || err?.details || err);
-  return /column\s+"?creator"?\s+does not exist|creator["\)]?\s+does not exist/i.test(msg);
+  return /creator["\)]?\s+does not exist|column "creator" does not exist/i.test(msg);
 }
 
-// mint activity helper
 async function getMintedByUserSet(artworkIds: string[], userId: string) {
   if (!artworkIds.length) return new Set<string>();
   const { data, error } = await supabase
@@ -67,12 +65,10 @@ async function getMintedByUserSet(artworkIds: string[], userId: string) {
   if (error) return new Set<string>();
   return new Set<string>((data || []).map((r: any) => r.artwork_id));
 }
-
-// server page of owned works
 async function fetchOwnedPage(userId: string, from: number, to: number) {
   return await supabase
     .from("artworks")
-    .select("id,title,cover_url,image_cid,created_at,owner,creator", { count: "exact" })
+    .select("id,title,cover_url,image_cid,created_at,owner", { count: "exact" })
     .eq("owner", userId)
     .eq("status", "published")
     .order("created_at", { ascending: false })
@@ -92,12 +88,12 @@ export default function PublicProfile() {
   const [loading, setLoading] = useState(true);
   const [counts, setCounts] = useState<Counts>({ posts: 0, followers: 0, following: 0 });
   const [badges, setBadges] = useState<Badge[]>([]);
+  const [hasCreator, setHasCreator] = useState<boolean | null>(null);
 
   const [artworks, setArtworks] = useState<Artwork[]>([]);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [creatorAvailable, setCreatorAvailable] = useState<boolean | null>(null);
 
   const [showModal, setShowModal] = useState<null | "followers" | "following">(null);
 
@@ -148,109 +144,118 @@ export default function PublicProfile() {
           .select("verified,staff,top_seller")
           .eq("user_id", profile.id)
           .maybeSingle();
-
         const list: Badge[] = [];
-        if ((b2 as any)?.verified)   list.push({ kind: "verified",   label: "Verified" });
-        if ((b2 as any)?.staff)      list.push({ kind: "staff",      label: "Staff" });
+        if ((b2 as any)?.verified) list.push({ kind: "verified", label: "Verified" });
+        if ((b2 as any)?.staff) list.push({ kind: "staff", label: "Staff" });
         if ((b2 as any)?.top_seller) list.push({ kind: "top_seller", label: "Top seller" });
         setBadges(list);
       }
     })();
   }, [profile]);
 
-  // Pager
+  // probe creator once
+  useEffect(() => {
+    (async () => {
+      if (hasCreator !== null) return;
+      try {
+        const { error } = await supabase.from("artworks").select("id,creator").limit(1);
+        if (error && looksLikeMissingCreator(error)) setHasCreator(false);
+        else setHasCreator(true);
+      } catch {
+        setHasCreator(false);
+      }
+    })();
+  }, [hasCreator]);
+
+  // Artworks pagination
   async function loadMore() {
     if (!profile || loadingMore) return;
     setLoadingMore(true);
 
-    const wantUploaded = tab === "artworks";
-    const wantPurchased = tab === "purchased";
+    const from = page * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
 
     try {
+      if (hasCreator) {
+        let q = supabase
+          .from("artworks")
+          .select("id,title,cover_url,image_cid,created_at,creator,owner", { count: "exact" })
+          .eq("status", "published")
+          .order("created_at", { ascending: false });
+
+        if (tab === "artworks") q = q.eq("creator", profile.id);
+        else if (tab === "purchased") q = q.eq("owner", profile.id).neq("creator", profile.id);
+        else { setLoadingMore(false); return; }
+
+        const { data, count, error } = await q.range(from, to);
+        if (error) throw error;
+
+        const rows = (data || []) as Artwork[];
+        setArtworks(prev => [...prev, ...rows]);
+        setPage(p => p + 1);
+        const total = typeof count === "number" ? count : 0;
+        setHasMore(from + rows.length < total);
+        setLoadingMore(false);
+        return;
+      }
+
+      // fallback mode: owned -> classify by activity
       let collected: Artwork[] = [];
-      let localFrom = page * PAGE_SIZE;
-      let localTo = localFrom + PAGE_SIZE - 1;
-      let serverHasMore = false;
+      let localFrom = from;
+      let localTo = to;
 
       while (collected.length < PAGE_SIZE) {
         const { data, count, error } = await fetchOwnedPage(profile.id, localFrom, localTo);
         if (error) throw error;
 
         const rows = (data || []) as Artwork[];
-        const total = typeof count === "number" ? count : undefined;
-
         if (rows.length === 0) {
-          serverHasMore = false;
+          const total = typeof count === "number" ? count : 0;
+          setHasMore(localFrom < total);
           break;
         }
 
-        // Try with creator first
-        let filtered: Artwork[] | null = null;
-        if (creatorAvailable !== false) {
-          try {
-            if (wantUploaded) {
-              filtered = rows.filter(r => r.creator && r.creator === profile.id);
-            } else if (wantPurchased) {
-              filtered = rows.filter(r => r.owner === profile.id && r.creator !== profile.id);
-            }
-            if (creatorAvailable === null) setCreatorAvailable(true);
-          } catch (e: any) {
-            if (looksLikeMissingCreator(e)) {
-              setCreatorAvailable(false);
-              filtered = null;
-            } else {
-              throw e;
-            }
-          }
-        }
+        const ids = rows.map(r => r.id);
+        const mintedByUser = await getMintedByUserSet(ids, profile.id);
 
-        // Fallback to activity if needed
-        if (!filtered) {
-          const mintedByMe = await getMintedByUserSet(rows.map(r => r.id), profile.id);
-          filtered = rows.filter(r => {
-            const isUploaded = mintedByMe.has(r.id);
-            if (wantUploaded) return isUploaded;
-            if (wantPurchased) return !isUploaded;
-            return false;
-          });
-        }
+        const filtered = rows.filter(r => {
+          const isUploaded = mintedByUser.has(r.id);
+          return tab === "artworks" ? isUploaded : tab === "purchased" ? !isUploaded : false;
+        });
 
         collected = collected.concat(filtered);
 
-        // Advance server window
         localFrom = localTo + 1;
         localTo = localFrom + PAGE_SIZE - 1;
 
-        serverHasMore = typeof total === "number" ? localFrom < total : rows.length === PAGE_SIZE;
-        if (!serverHasMore) break;
-        if (collected.length >= PAGE_SIZE) break;
+        const total = typeof count === "number" ? count : undefined;
+        if (typeof total === "number" && localFrom >= total) break;
       }
 
       setArtworks(prev => [...prev, ...collected]);
       setPage(p => p + 1);
-      setHasMore(collected.length >= PAGE_SIZE || serverHasMore);
+      setHasMore(collected.length === PAGE_SIZE);
     } catch (e: any) {
       const msg = e?.message || e?.details || e?.hint || "Unknown error";
-      if (page === 0) {
-        toast({ variant: "error", title: "Couldn’t load artworks", description: msg });
-      }
+      if (page === 0) toast({ variant: "error", title: "Couldn’t load artworks", description: msg });
     } finally {
       setLoadingMore(false);
     }
   }
 
-  // Reset list when profile or tab changes
+  // Reset list when profile/tab changes
   useEffect(() => {
     setArtworks([]); setPage(0); setHasMore(true);
     if (profile && (tab === "artworks" || tab === "purchased")) loadMore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile?.id, tab]);
+  }, [profile?.id, tab, hasCreator]);
 
   const displayName = useMemo(
     () => profile?.display_name || (profile?.username ? `@${profile.username}` : "Artist"),
     [profile]
   );
 
+  // Social buttons
   const webUrl = useMemo(() => toWebUrl(profile?.website), [profile?.website]);
   const igUrl = useMemo(() => toInstagramUrl(profile?.instagram), [profile?.instagram]);
   const twUrl = useMemo(() => toTwitterUrl(profile?.twitter), [profile?.twitter]);
@@ -271,6 +276,7 @@ export default function PublicProfile() {
     });
   }, [profile, displayName]);
 
+  // Share handler
   async function handleShare() {
     if (!profile) return;
     const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -501,14 +507,8 @@ export default function PublicProfile() {
           )}
 
           {tab === "likes" && <LikesGrid profileId={profile.id} />}
-
-          {tab === "collections" && (
-            <CollectionsGrid ownerId={profile.id} isOwner={false} />
-          )}
-
-          {tab === "activity" && (
-            <div className="text-neutral-400">Activity feed coming soon.</div>
-          )}
+          {tab === "collections" && <CollectionsGrid ownerId={profile.id} isOwner={false} />}
+          {tab === "activity" && <div className="text-neutral-400">Activity feed coming soon.</div>}
         </div>
 
         <SuggestionsRail ownerId={profile.id} />
