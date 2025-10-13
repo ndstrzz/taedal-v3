@@ -343,6 +343,7 @@ app.post("/api/listings/fill", async (req, res) => {
     const { listing_id, tx_hash } = req.body || {};
     if (!listing_id) return res.status(400).json({ error: "Missing listing_id" });
 
+    // 1) Mark listing filled
     const { data: lst, error: e1 } = await sbAdmin
       .from("listings")
       .update({ status: "filled", updated_at: new Date().toISOString() })
@@ -351,20 +352,52 @@ app.post("/api/listings/fill", async (req, res) => {
       .single();
     if (e1) throw e1;
 
-    await sbAdmin.from("activity").insert({
-      artwork_id: lst.artwork_id,
-      kind: "buy",
-      actor: user.id,
-      tx_hash,
-      note: `Bought for ${lst.price ?? lst.price_eth} ${lst.currency || "ETH"}`,
-    });
+    // 2) Get previous owner
+    const { data: art0, error: artErr } = await sbAdmin
+      .from("artworks")
+      .select("id, owner")
+      .eq("id", lst.artwork_id)
+      .single();
+    if (artErr) throw artErr;
+    const prevOwner = art0?.owner || null;
 
-    res.json({ ok: true, listing: lst });
+    // 3) Transfer ownership to buyer
+    const { data: art1, error: updErr } = await sbAdmin
+      .from("artworks")
+      .update({ owner: user.id, updated_at: new Date().toISOString() })
+      .eq("id", lst.artwork_id)
+      .select("*")
+      .single();
+    if (updErr) throw updErr;
+
+    // 4) Log activity
+    const acts = [
+      {
+        artwork_id: lst.artwork_id,
+        kind: "buy",
+        actor: user.id,
+        tx_hash,
+        note: `Bought for ${lst.price ?? lst.price_eth} ${lst.currency || "ETH"}`,
+      },
+    ];
+    if (prevOwner && prevOwner !== user.id) {
+      acts.push({
+        artwork_id: lst.artwork_id,
+        kind: "transfer",
+        actor: prevOwner,
+        note: `Transferred to ${user.id}`,
+      });
+    }
+    await sbAdmin.from("activity").insert(acts);
+
+    res.json({ ok: true, listing: lst, artwork: art1 });
   } catch (e) {
     console.error("[listings/fill]", e);
     res.status(500).json({ error: e?.message || "failed" });
   }
 });
+
+
 
 // Debug
 app.get("/api/_debug/supabase", (_req, res) => {

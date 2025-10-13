@@ -9,26 +9,72 @@ import MakeOfferModal from "../components/MakeOfferModal";
 import CheckoutModal from "../components/CheckoutModal";
 
 type Attribute = { trait_type: string; value: string | number };
-type Metadata = { name?: string; description?: string; image?: string; animation_url?: string; attributes?: Attribute[]; };
+type Metadata = {
+  name?: string;
+  description?: string;
+  image?: string;
+  animation_url?: string;
+  attributes?: Attribute[];
+};
 
 type Artwork = {
-  id: string; title: string | null; description: string | null; owner: string | null;
+  id: string;
+  title: string | null;
+  description: string | null;
+  owner: string | null;
   creator?: string | null;
-  cover_url: string | null; image_cid: string | null; animation_cid: string | null;
-  metadata_url: string | null; token_id: string | null; tx_hash: string | null;
-  media_kind: "image" | "video" | null; royalty_bps: number | null;
-  sale_kind: "fixed" | "auction" | null; sale_price: string | null;
-  sale_currency: "ETH" | "WETH" | "USD" | null; created_at: string;
+  cover_url: string | null;
+  image_cid: string | null;
+  animation_cid: string | null;
+  metadata_url: string | null;
+  token_id: string | null;
+  tx_hash: string | null;
+  media_kind: "image" | "video" | null;
+  royalty_bps: number | null;
+  sale_kind: "fixed" | "auction" | null;
+  sale_price: string | null;
+  sale_currency: "ETH" | "WETH" | "USD" | null;
+  created_at: string;
 };
 
 type Listing = {
-  id?: string; listing_id?: string; artwork_id: string; lister: string | null;
-  seller?: string | null; price?: string | null; price_eth?: string | null;
-  currency?: string | null; status: "active" | "cancelled" | "filled"; created_at: string;
+  id?: string;
+  listing_id?: string;
+  artwork_id: string;
+  lister: string | null;
+  seller?: string | null;
+  price?: string | null;
+  price_eth?: string | null;
+  currency?: string | null;
+  status: "active" | "cancelled" | "filled";
+  created_at: string;
 };
-type TraitStat = { trait_type: string; value: string; count: number; total: number; freq: number; };
-type Act = { id: string; kind: "mint"|"list"|"sale"|"bid"|"transfer"|"buy"|"cancel_list"; tx_hash: string | null; price_eth: string | number | null; actor: string | null; created_at: string; };
-type BestOffer = { artwork_id: string; offer_id: string; offerer: string; price: string; currency: string; created_at: string; };
+
+type TraitStat = {
+  trait_type: string;
+  value: string;
+  count: number;
+  total: number;
+  freq: number;
+};
+
+type Act = {
+  id: string;
+  kind: "mint" | "list" | "sale" | "bid" | "transfer" | "buy" | "cancel_list";
+  tx_hash: string | null;
+  price_eth: string | number | null;
+  actor: string | null;
+  created_at: string;
+};
+
+type BestOffer = {
+  artwork_id: string;
+  offer_id: string;
+  offerer: string;
+  price: string;
+  currency: string;
+  created_at: string;
+};
 
 function Skeleton() {
   return (
@@ -76,6 +122,7 @@ export default function ArtworkDetail() {
   const [showCheckout, setShowCheckout] = useState(false);
   const [showOffer, setShowOffer] = useState(false);
 
+  // initial load
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -90,9 +137,12 @@ export default function ArtworkDetail() {
         setLoading(false);
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [id]);
 
+  // metadata fetch
   useEffect(() => {
     let aborted = false;
     (async () => {
@@ -103,10 +153,20 @@ export default function ArtworkDetail() {
         if (!r.ok) throw new Error(`Metadata HTTP ${r.status}`);
         const j = (await r.json()) as Metadata;
         if (!aborted) setMeta(j || null);
-      } catch { if (!aborted) setMeta(null); }
+      } catch {
+        if (!aborted) setMeta(null);
+      }
     })();
-    return () => { aborted = true; };
+    return () => {
+      aborted = true;
+    };
   }, [art?.metadata_url]);
+
+  // helpers
+  async function fetchArtwork(artworkId: string) {
+    const { data, error } = await supabase.from("artworks").select("*").eq("id", artworkId).single();
+    if (!error && data) setArt(data as any);
+  }
 
   async function fetchActivity(artworkId: string) {
     const { data } = await supabase
@@ -116,8 +176,12 @@ export default function ArtworkDetail() {
       .order("created_at", { ascending: false });
     if (data) setActs(data as any);
   }
-  useEffect(() => { if (art?.id) fetchActivity(art.id); }, [art?.id]);
 
+  useEffect(() => {
+    if (art?.id) fetchActivity(art.id);
+  }, [art?.id]);
+
+  // trait stats
   useEffect(() => {
     (async () => {
       let { data, error } = await supabase.from("trait_stats").select("*");
@@ -129,33 +193,57 @@ export default function ArtworkDetail() {
     })();
   }, []);
 
+  // listing + best offer
   async function fetchListing(artworkId: string) {
-    const viaView = await supabase.from("v_active_listing").select("*").eq("artwork_id", artworkId).maybeSingle();
-    if (viaView.data) { setListing(viaView.data as any); return; }
+    const viaView = await supabase
+      .from("v_active_listing")
+      .select("*")
+      .eq("artwork_id", artworkId)
+      .maybeSingle();
+    if (viaView.data) {
+      setListing(viaView.data as any);
+      return;
+    }
     const fallback = await supabase
-      .from("listings").select("*")
-      .eq("artwork_id", artworkId).eq("status", "active")
-      .order("created_at", { ascending: false }).limit(1).maybeSingle();
-    if (fallback.data) setListing(fallback.data as any); else setListing(null);
+      .from("listings")
+      .select("*")
+      .eq("artwork_id", artworkId)
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (fallback.data) setListing(fallback.data as any);
+    else setListing(null);
   }
-  useEffect(() => { if (id) fetchListing(id); }, [id]);
+  useEffect(() => {
+    if (id) fetchListing(id);
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;
     (async () => {
-      const { data, error } = await supabase.from("v_best_offer").select("*").eq("artwork_id", id).maybeSingle();
-      if (!error && data) setBestOffer(data as any); else setBestOffer(null);
+      const { data, error } = await supabase
+        .from("v_best_offer")
+        .select("*")
+        .eq("artwork_id", id)
+        .maybeSingle();
+      if (!error && data) setBestOffer(data as any);
+      else setBestOffer(null);
     })();
   }, [id]);
 
-  async function refetchAll() { if (!id) return; await Promise.all([fetchListing(id), fetchActivity(id)]); }
+  // IMPORTANT: also refresh the artwork row after purchase so owner label updates
+  async function refetchAll() {
+    if (!id) return;
+    await Promise.all([fetchListing(id), fetchActivity(id), fetchArtwork(id)]);
+  }
 
-  // Build media source candidates (multiple gateways) + poster fallback
+  // media sources
   const poster = art?.cover_url || DEFAULT_COVER_URL;
   const imageCandidates = useMemo(() => {
     if (art?.media_kind === "video") return [] as string[];
     if (art?.image_cid) return ipfsCandidates(`ipfs://${art.image_cid}`);
-    if (meta?.image)    return ipfsCandidates(meta.image);
+    if (meta?.image) return ipfsCandidates(meta.image);
     return poster ? [poster] : [];
   }, [art?.media_kind, art?.image_cid, meta?.image, poster]);
 
@@ -166,10 +254,8 @@ export default function ArtworkDetail() {
     return [];
   }, [art?.media_kind, art?.animation_cid, meta?.animation_url]);
 
-  // index states to rotate through gateways on errors
   const [imgIdx, setImgIdx] = useState(0);
   const [vidIdx, setVidIdx] = useState(0);
-
   useEffect(() => setImgIdx(0), [imageCandidates.join("|")]);
   useEffect(() => setVidIdx(0), [videoCandidates.join("|")]);
 
@@ -182,7 +268,7 @@ export default function ArtworkDetail() {
   const title = art.title || meta?.name || "Untitled";
   const desc = art.description || meta?.description || "";
   const royaltyPct = ((art.royalty_bps || 0) / 100).toFixed(2);
-  const attributes: Attribute[] = Array.isArray(meta?.attributes) ? meta!.attributes! : [];
+  const attributes: Attribute[] = Array.isArray(meta?.attributes) ? (meta!.attributes as Attribute[]) : [];
 
   const listingId = (listing?.listing_id || listing?.id || null) as string | null;
   const currentPrice = listing?.price ?? listing?.price_eth ?? art.sale_price ?? "";
@@ -193,12 +279,15 @@ export default function ArtworkDetail() {
 
   async function ownerListForSaleUSD() {
     try {
-      if (!user?.id) { alert("Please log in."); return; }
+      if (!user?.id) {
+        alert("Please log in.");
+        return;
+      }
       const j = await apiFetch("/api/listings/create", {
         method: "POST",
         body: JSON.stringify({
           artwork_id: art.id,
-          price: 123,              // placeholder; replace with UI later
+          price: 123, // placeholder; replace with UI later
           currency: "USD",
         }),
       });
@@ -221,7 +310,7 @@ export default function ArtworkDetail() {
     }
   }
 
-  async function handleBuyClick() {
+  function handleBuyClick() {
     setShowCheckout(true);
   }
 
@@ -237,14 +326,12 @@ export default function ArtworkDetail() {
             <span className="text-sm">You are the current owner of this artwork.</span>
             <div className="ml-auto flex gap-2">
               {listingId ? (
-                <>
-                  <button
-                    onClick={cancelListing}
-                    className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900"
-                  >
-                    Not for sale
-                  </button>
-                </>
+                <button
+                  onClick={cancelListing}
+                  className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900"
+                >
+                  Not for sale
+                </button>
               ) : (
                 <button
                   className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900"
@@ -311,7 +398,9 @@ export default function ArtworkDetail() {
               <Link to={`/u/${art.owner}`} className="text-neutral-200 hover:underline">
                 {art.owner.slice(0, 6)}…{art.owner.slice(-4)}
               </Link>
-            ) : ("unknown")}
+            ) : (
+              "unknown"
+            )}
           </div>
 
           <div className="mt-4 rounded-2xl border border-neutral-800 p-4">
@@ -326,19 +415,26 @@ export default function ArtworkDetail() {
 
             <div className="mt-3 flex gap-2">
               {!isOwner && (
-                <button className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
-                  disabled={!canBuy} onClick={handleBuyClick}>
+                <button
+                  className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
+                  disabled={!canBuy}
+                  onClick={handleBuyClick}
+                >
                   Buy now
                 </button>
               )}
               {isOwner && !listingId && (
-                <button className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
-                  onClick={ownerListForSaleUSD}>
+                <button
+                  className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
+                  onClick={ownerListForSaleUSD}
+                >
                   List for sale
                 </button>
               )}
-              <button className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
-                onClick={() => setShowOffer(true)}>
+              <button
+                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
+                onClick={() => setShowOffer(true)}
+              >
                 Make offer
               </button>
             </div>
@@ -350,9 +446,13 @@ export default function ArtworkDetail() {
           {/* Tabs */}
           <div className="mt-6 flex gap-2">
             {(["details", "activity"] as const).map((t) => (
-              <button key={t}
-                className={`rounded-full border px-3 py-1 text-sm capitalize ${tab === t ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"}`}
-                onClick={() => setTab(t)}>
+              <button
+                key={t}
+                className={`rounded-full border px-3 py-1 text-sm capitalize ${
+                  tab === t ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"
+                }`}
+                onClick={() => setTab(t)}
+              >
                 {t}
               </button>
             ))}
@@ -372,8 +472,12 @@ export default function ArtworkDetail() {
                 <div className="grid grid-cols-2 gap-2 text-xs text-neutral-400">
                   <div className="rounded-lg border border-neutral-800 p-2">
                     <div className="text-neutral-500">Metadata URI</div>
-                    <a className="truncate text-neutral-300 hover:underline"
-                       href={ipfsToHttp(art.metadata_url || "")} target="_blank" rel="noreferrer">
+                    <a
+                      className="truncate text-neutral-300 hover:underline"
+                      href={ipfsToHttp(art.metadata_url || "")}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
                       {art.metadata_url || "—"}
                     </a>
                   </div>
@@ -392,10 +496,17 @@ export default function ArtworkDetail() {
                 <div className="text-sm text-neutral-400">No activity yet.</div>
               ) : (
                 acts.map((a) => (
-                  <div key={a.id} className="flex items-center justify-between rounded-xl border border-neutral-800 p-3 text-sm">
+                  <div
+                    key={a.id}
+                    className="flex items-center justify-between rounded-xl border border-neutral-800 p-3 text-sm"
+                  >
                     <div className="flex items-center gap-2">
-                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize">{a.kind}</span>
-                      <span className="text-neutral-300">{a.actor ? `${a.actor.slice(0, 6)}…${a.actor.slice(-4)}` : "Someone"}</span>
+                      <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize">
+                        {a.kind}
+                      </span>
+                      <span className="text-neutral-300">
+                        {a.actor ? `${a.actor.slice(0, 6)}…${a.actor.slice(-4)}` : "Someone"}
+                      </span>
                     </div>
                     <div className="text-right">
                       {a.price_eth ? <div className="text-neutral-200">{a.price_eth} ETH</div> : null}
@@ -418,7 +529,9 @@ export default function ArtworkDetail() {
         {attributes.length ? (
           <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
             {attributes.map((t, i) => {
-              const s = traitStats.find((x) => x.trait_type === t.trait_type && x.value === String(t.value));
+              const s = traitStats.find(
+                (x) => x.trait_type === t.trait_type && x.value === String(t.value)
+              );
               const pct = s ? Math.round((s.freq || 0) * 1000) / 10 : null;
               return (
                 <li key={i} className="rounded-xl border border-neutral-800 p-3">
@@ -431,7 +544,9 @@ export default function ArtworkDetail() {
                       {pct !== null ? (
                         <>
                           <div className="text-xs text-neutral-400">{pct}%</div>
-                          <div className="text-[11px] text-neutral-500">{s?.count ?? 0} of {s?.total ?? 0}</div>
+                          <div className="text-[11px] text-neutral-500">
+                            {s?.count ?? 0} of {s?.total ?? 0}
+                          </div>
                         </>
                       ) : (
                         <div className="text-xs text-neutral-500">—</div>
@@ -458,7 +573,7 @@ export default function ArtworkDetail() {
           title={title}
           price={String(currentPrice)}
           currency={currentCurrency}
-          imageUrl={(imageCandidates[imgIdx] || poster)}
+          imageUrl={imageCandidates[imgIdx] || poster}
         />
       )}
       {showOffer && (
