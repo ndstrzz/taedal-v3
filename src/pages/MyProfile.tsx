@@ -26,7 +26,6 @@ type Artwork = {
   cover_url: string | null;
   image_cid: string | null;
   created_at: string;
-  creator?: string | null;
   owner?: string | null;
 };
 
@@ -37,48 +36,60 @@ const ipfs = (cid?: string | null) => (cid ? `https://ipfs.io/ipfs/${cid}` : "")
 
 // URL helpers
 function toWebUrl(s?: string | null) {
-  if (!s) return null;
-  const t = s.trim();
-  if (!t) return null;
-  if (/^https?:\/\//i.test(t)) return t;
-  return `https://${t}`;
+  if (!s) return null; const t=s.trim(); if(!t) return null;
+  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
 }
 function toInstagramUrl(s?: string | null) {
-  if (!s) return null;
-  const t = s.trim().replace(/^@/, "");
-  if (!t) return null;
-  if (/^https?:\/\//i.test(t)) return t;
-  return `https://instagram.com/${encodeURIComponent(t)}`;
+  if (!s) return null; const t=s.trim().replace(/^@/,""); if(!t) return null;
+  return /^https?:\/\//i.test(t) ? t : `https://instagram.com/${encodeURIComponent(t)}`;
 }
 function toTwitterUrl(s?: string | null) {
-  if (!s) return null;
-  const t = s.trim().replace(/^@/, "");
-  if (!t) return null;
-  if (/^https?:\/\//i.test(t)) return t;
-  return `https://twitter.com/${encodeURIComponent(t)}`;
+  if (!s) return null; const t=s.trim().replace(/^@/,""); if(!t) return null;
+  return /^https?:\/\//i.test(t) ? t : `https://twitter.com/${encodeURIComponent(t)}`;
 }
 
-// Inline icons (kept local so the file compiles on its own)
-const GlobeIcon = (props: React.SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
-    <path fill="currentColor" d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2Zm7.93 9h-3.09a15.7 15.7 0 0 0-1.15-5.01A8.03 8.03 0 0 1 19.93 11ZM12 4c.9 0 2.3 2.04 2.92 6H9.08C9.7 6.04 11.1 4 12 4ZM8.31 6a15.7 15.7 0 0 0-1.16 5H4.07A8.03 8.03 0 0 1 8.31 6ZM4.07 13h3.08c.12 1.77.5 3.5 1.16 5a8.03 8.03 0 0 1-4.24-5Zm4.99 0h6c-.62 3.96-2.02 6-3 6s-2.38-2.04-3-6Zm6.63 5c.66-1.5 1.04-3.23 1.16-5h3.08a8.03 8.03 0 0 1-4.24 5Z"/>
-  </svg>
-);
-const IgIcon = (props: React.SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
-    <path fill="currentColor" d="M7 2h10a5 5 0 0 1 5 5v10a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V7a5 5 0 0 1 5-5Zm0 2a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3H7Zm5 3a6 6 0 1 1 0 12 6 6 0 0 1 0-12Zm0 2.5A3.5 3.5 0 1 0 12 17a3.5 3.5 0 0 0 0-7.5ZM18 6.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/>
-  </svg>
-);
-const XIcon = (props: React.SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
-    <path fill="currentColor" d="M3 3h4.6l4.7 6.5L17.9 3H21l-7.3 9.2L21.4 21H16.8l-5-6.9L8.1 21H3l7.7-9.8L3 3Z"/>
-  </svg>
-);
-const ShareIcon = (props: React.SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
-    <path fill="currentColor" d="M14 3l7 7-1.41 1.41L15 6.83V17a5 5 0 0 1-5 5H5v-2h5a3 3 0 0 0 3-3V6.83l-4.59 4.58L7 10l7-7Z"/>
-  </svg>
-);
+// Inline icons
+const GlobeIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" {...p}><path fill="currentColor" d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2Zm7.93 9h-3.09a15.7 15.7 0 0 0-1.15-5.01A8.03 8.03 0 0 1 19.93 11ZM12 4c.9 0 2.3 2.04 2.92 6H9.08C9.7 6.04 11.1 4 12 4ZM8.31 6a15.7 15.7 0 0 0-1.16 5H4.07A8.03 8.03 0 0 1 8.31 6ZM4.07 13h3.08c.12 1.77.5 3.5 1.16 5a8.03 8.03 0 0 1-4.24-5Zm4.99 0h6c-.62 3.96-2.02 6-3 6s-2.38-2.04-3-6Zm6.63 5c.66-1.5 1.04-3.23 1.16-5h3.08a8.03 8.03 0 0 1-4.24 5Z"/></svg>);
+const IgIcon    = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" {...p}><path fill="currentColor" d="M7 2h10a5 5 0 0 1 5 5v10a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V7a5 5 0 0 1 5-5Zm0 2a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3H7Zm5 3a6 6 0 1 1 0 12 6 6 0 0 1 0-12Zm0 2.5A3.5 3.5 0 1 0 12 17a3.5 3.5 0 0 0 0-7.5ZM18 6.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/></svg>);
+const XIcon     = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" {...p}><path fill="currentColor" d="M3 3h4.6l4.7 6.5L17.9 3H21l-7.3 9.2L21.4 21H16.8l-5-6.9L8.1 21H3l7.7-9.8L3 3Z"/></svg>);
+const ShareIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" {...p}><path fill="currentColor" d="M14 3l7 7-1.41 1.41L15 6.83V17a5 5 0 0 1-5 5H5v-2h5a3 3 0 0 0 3-3V6.83l-4.59 4.58L7 10l7-7Z"/></svg>);
+
+// --- Helpers that replace any use of `creator` ---
+
+/** Return a Set of artwork_ids minted by this user from the provided ids */
+async function getMintedByUserSet(artworkIds: string[], userId: string) {
+  if (!artworkIds.length) return new Set<string>();
+  const { data, error } = await supabase
+    .from("activity")
+    .select("artwork_id")
+    .eq("kind", "mint")
+    .eq("actor", userId)
+    .in("artwork_id", artworkIds);
+  if (error) return new Set<string>();
+  return new Set<string>((data || []).map((r: any) => r.artwork_id));
+}
+
+/** Fetch artworks owned by user (paged on server) */
+async function fetchOwnedPage(userId: string, from: number, to: number) {
+  return await supabase
+    .from("artworks")
+    .select("id,title,cover_url,image_cid,created_at,owner", { count: "exact" })
+    .eq("owner", userId)
+    .eq("status", "published")
+    .order("created_at", { ascending: false })
+    .range(from, to);
+}
+
+/** Fetch a page of the user's minted artwork_ids by paging the activity table */
+async function fetchMintedIdsPage(userId: string, from: number, to: number) {
+  return await supabase
+    .from("activity")
+    .select("artwork_id,created_at", { count: "exact" })
+    .eq("kind", "mint")
+    .eq("actor", userId)
+    .order("created_at", { ascending: false })
+    .range(from, to);
+}
 
 export default function MyProfile() {
   const { user } = useAuth();
@@ -91,7 +102,7 @@ export default function MyProfile() {
   const [counts, setCounts] = useState<Counts>({ posts: 0, followers: 0, following: 0 });
 
   const [artworks, setArtworks] = useState<Artwork[]>([]);
-  const [page, setPage] = useState(0);
+  const [cursor, setCursor] = useState(0); // server cursor (activity for uploads, artworks for owned)
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
@@ -128,60 +139,87 @@ export default function MyProfile() {
     })();
   }, [profile]);
 
-  function isRangeError(err: any) {
-    const code = err?.code || err?.details || err?.message;
-    return /PGRST116|range|Range Not Satisfiable/i.test(String(code));
-  }
-
   async function loadMore() {
-    if (!profile || loadingMore) return;
+    if (!profile || loadingMore || !hasMore) return;
     setLoadingMore(true);
 
-    const from = page * PAGE_SIZE;
-    const to = from + PAGE_SIZE - 1;
+    try {
+      if (tab === "artworks") {
+        // Page by activity (minted by me)
+        const from = cursor;
+        const to = from + PAGE_SIZE - 1;
+        const { data: acts, error, count } = await fetchMintedIdsPage(profile.id, from, to);
+        if (error) throw error;
 
-    // We rely on 'creator' for clean separation.
-    // If the column doesn't exist yet on your DB, the fallback is handled below.
-    let q = supabase
-      .from("artworks")
-      .select("id,title,cover_url,image_cid,created_at,creator,owner", { count: "exact" })
-      .eq("status", "published")
-      .order("created_at", { ascending: false });
+        const ids = (acts || []).map((a: any) => a.artwork_id);
+        if (ids.length === 0) {
+          setHasMore(false);
+          setLoadingMore(false);
+          return;
+        }
 
-    if (tab === "artworks") q = q.eq("creator", profile.id);
-    else if (tab === "purchased") q = q.eq("owner", profile.id).neq("creator", profile.id);
-    else {
-      setLoadingMore(false);
-      return;
-    }
+        const { data: rows, error: e2 } = await supabase
+          .from("artworks")
+          .select("id,title,cover_url,image_cid,created_at,owner")
+          .in("id", ids)
+          .eq("status", "published");
 
-    const { data, count, error } = await q.range(from, to);
+        if (e2) throw e2;
 
-    if (error) {
-      // 416 “Range Not Satisfiable” – we’re past the end; just stop paging
-      if (isRangeError(error)) {
-        setHasMore(false);
-        setLoadingMore(false);
-        return;
+        // preserve activity order
+        const map = new Map(rows?.map((r: any) => [r.id, r]));
+        const ordered: Artwork[] = ids.map((id) => map.get(id)).filter(Boolean) as Artwork[];
+
+        setArtworks((prev) => [...prev, ...ordered]);
+        setCursor(to + 1);
+        const total = typeof count === "number" ? count : from + ordered.length;
+        setHasMore(from + ids.length < total);
+      } else if (tab === "purchased") {
+        // Page by owned artworks and filter out ones I minted
+        let from = cursor;
+        let to = from + PAGE_SIZE - 1;
+        let collected: Artwork[] = [];
+        let reachedEnd = false;
+
+        while (collected.length < PAGE_SIZE) {
+          const { data, error } = await fetchOwnedPage(profile.id, from, to);
+          if (error) throw error;
+
+          const rows = (data || []) as Artwork[];
+          if (rows.length === 0) { reachedEnd = true; break; }
+
+          const ids = rows.map((r) => r.id);
+          const mintedByMe = await getMintedByUserSet(ids, profile.id);
+          const purchased = rows.filter((r) => !mintedByMe.has(r.id));
+
+          collected = collected.concat(purchased);
+
+          from = to + 1;
+          to = from + PAGE_SIZE - 1;
+
+          if (rows.length < PAGE_SIZE) {
+            // likely near end; loop one more time will confirm
+          }
+          if (collected.length >= PAGE_SIZE) break;
+        }
+
+        setArtworks((prev) => [...prev, ...collected]);
+        setCursor(from);
+        setHasMore(!reachedEnd && collected.length > 0);
       }
-      toast({ variant: "error", title: "Couldn’t load artworks", description: error.message || "Error" });
+    } catch (e: any) {
+      const msg = e?.message || e?.details || e?.hint || "Unknown error";
+      if (artworks.length === 0) {
+        toast({ variant: "error", title: "Couldn’t load artworks", description: msg });
+      }
+    } finally {
       setLoadingMore(false);
-      return;
     }
-
-    const rows = (data || []) as Artwork[];
-    setArtworks((prev) => [...prev, ...rows]);
-    setPage((p) => p + 1);
-    const total = typeof count === "number" ? count : 0;
-    setHasMore(from + rows.length < total);
-    setLoadingMore(false);
   }
 
-  // reset grid when tab/profile changes
+  // reset list + cursor when profile or tab changes
   useEffect(() => {
-    setArtworks([]);
-    setPage(0);
-    setHasMore(true);
+    setArtworks([]); setCursor(0); setHasMore(true);
     if (profile && (tab === "artworks" || tab === "purchased")) loadMore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.id, tab]);
@@ -205,12 +243,10 @@ export default function MyProfile() {
     const url = profile.username ? `${origin}/u/${profile.username}` : `${origin}/me`;
     const title = `${displayName} on taedal`;
     try {
-      if (navigator.share) {
-        await navigator.share({ title, text: title, url });
-      } else {
+      if (navigator.share) await navigator.share({ title, text: title, url });
+      else {
         await navigator.clipboard.writeText(url);
-        // @ts-ignore
-        (window as any).toast?.({ title: "Link copied", description: "Profile URL copied to clipboard." });
+        toast({ title: "Link copied", description: "Profile URL copied to clipboard." });
       }
     } catch {}
   }

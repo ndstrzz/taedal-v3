@@ -28,7 +28,6 @@ type Artwork = {
   cover_url: string | null;
   image_cid: string | null;
   created_at: string;
-  creator?: string | null;
   owner?: string | null;
 };
 
@@ -39,15 +38,48 @@ const PAGE_SIZE = 12;
 const ipfs = (cid?: string | null) => (cid ? `https://ipfs.io/ipfs/${cid}` : "");
 
 // icons
-const GlobeIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...p}><path fill="currentColor" d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2Zm7.93 9h-3.09a15.7 15.7 0 0 0-1.15-5.01A8.03 8.03 0 0 1 19.93 11ZM12 4c.9 0 2.3 2.04 2.92 6H9.08C9.7 6.04 11.1 4 12 4ZM8.31 6a15.7 15.7 0 0 0-1.16 5H4.07A8.03 8.03 0 0 1 8.31 6ZM4.07 13h3.08c.12 1.77.5 3.5 1.16 5a8.03 8.03 0 0 1-4.24-5Zm4.99 0h6c-.62 3.96-2.02 6-3 6s-2.38-2.04-3-6Zm6.63 5c.66-1.5 1.04-3.23 1.16-5h3.08a8.03 8.03 0 0 1-4.24 5Z"/></svg>);
-const IgIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...p}><path fill="currentColor" d="M7 2h10a5 5 0 0 1 5 5v10a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V7a5 5 0 0 1 5-5Zm0 2a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3H7Zm5 3a6 6 0 1 1 0 12 6 6 0 0 1 0-12Zm0 2.5A3.5 3.5 0 1 0 12 17a3.5 3.5 0 0 0 0-7.5ZM18 6.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/></svg>);
-const XIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...p}><path fill="currentColor" d="M3 3h4.6l4.7 6.5L17.9 3H21l-7.3 9.2L21.4 21H16.8l-5-6.9L8.1 21H3l7.7-9.8L3 3Z"/></svg>);
-const ShareIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...p}><path fill="currentColor" d="M14 3l7 7-1.41 1.41L15 6.83V17a5 5 0 0 1-5 5H5v-2h5a3 3 0 0 0 3-3V6.83l-4.59 4.58L7 10l7-7Z"/></svg>);
+const GlobeIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" {...p}><path fill="currentColor" d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2Zm7.93 9h-3.09a15.7 15.7 0 0 0-1.15-5.01A8.03 8.03 0 0 1 19.93 11ZM12 4c.9 0 2.3 2.04 2.92 6H9.08C9.7 6.04 11.1 4 12 4ZM8.31 6a15.7 15.7 0 0 0-1.16 5H4.07A8.03 8.03 0 0 1 8.31 6ZM4.07 13h3.08c.12 1.77.5 3.5 1.16 5a8.03 8.03 0 1 1-4.24-5Zm4.99 0h6c-.62 3.96-2.02 6-3 6s-2.38-2.04-3-6Zm6.63 5c.66-1.5 1.04-3.23 1.16-5h3.08a8.03 8.03 0 0 1-4.24 5Z"/></svg>);
+const IgIcon   = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" {...p}><path fill="currentColor" d="M7 2h10a5 5 0 0 1 5 5v10a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V7a5 5 0 0 1 5-5Zm0 2a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3H7Zm5 3a6 6 0 1 1 0 12 6 6 0 0 1 0-12Zm0 2.5A3.5 3.5 0 1 0 12 17a3.5 3.5 0 0 0 0-7.5ZM18 6.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/></svg>);
+const XIcon    = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" {...p}><path fill="currentColor" d="M3 3h4.6l4.7 6.5L17.9 3H21l-7.3 9.2L21.4 21H16.8l-5-6.9L8.1 21H3l7.7-9.8L3 3Z"/></svg>);
+const ShareIcon= (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" {...p}><path fill="currentColor" d="M14 3l7 7-1.41 1.41L15 6.83V17a5 5 0 0 1-5 5H5v-2h5a3 3 0 0 0 3-3V6.83l-4.59 4.58L7 10l7-7Z"/></svg>);
 
 // url builders
-function toWebUrl(s?: string | null) { if (!s) return null; const t=s.trim(); if(!t) return null; if(/^https?:\/\//i.test(t)) return t; return `https://${t}`; }
-function toInstagramUrl(s?: string | null) { if (!s) return null; const t=s.trim().replace(/^@/,""); if(!t) return null; if(/^https?:\/\//i.test(t)) return t; return `https://instagram.com/${encodeURIComponent(t)}`; }
-function toTwitterUrl(s?: string | null) { if (!s) return null; const t=s.trim().replace(/^@/,""); if(!t) return null; if(/^https?:\/\//i.test(t)) return t; return `https://twitter.com/${encodeURIComponent(t)}`; }
+function toWebUrl(s?: string | null) { if (!s) return null; const t=s.trim(); if(!t) return null; return /^https?:\/\//i.test(t)?t:`https://${t}`; }
+function toInstagramUrl(s?: string | null) { if (!s) return null; const t=s.trim().replace(/^@/,""); if(!t) return null; return /^https?:\/\//i.test(t)?t:`https://instagram.com/${encodeURIComponent(t)}`; }
+function toTwitterUrl(s?: string | null) { if (!s) return null; const t=s.trim().replace(/^@/,""); if(!t) return null; return /^https?:\/\//i.test(t)?t:`https://twitter.com/${encodeURIComponent(t)}`; }
+
+/** Helpers (no `creator`) */
+async function getMintedByUserSet(artworkIds: string[], userId: string) {
+  if (!artworkIds.length) return new Set<string>();
+  const { data, error } = await supabase
+    .from("activity")
+    .select("artwork_id")
+    .eq("kind", "mint")
+    .eq("actor", userId)
+    .in("artwork_id", artworkIds);
+  if (error) return new Set<string>();
+  return new Set<string>((data || []).map((r: any) => r.artwork_id));
+}
+
+async function fetchOwnedPage(userId: string, from: number, to: number) {
+  return await supabase
+    .from("artworks")
+    .select("id,title,cover_url,image_cid,created_at,owner", { count: "exact" })
+    .eq("owner", userId)
+    .eq("status", "published")
+    .order("created_at", { ascending: false })
+    .range(from, to);
+}
+
+async function fetchMintedIdsPage(userId: string, from: number, to: number) {
+  return await supabase
+    .from("activity")
+    .select("artwork_id,created_at", { count: "exact" })
+    .eq("kind", "mint")
+    .eq("actor", userId)
+    .order("created_at", { ascending: false })
+    .range(from, to);
+}
 
 export default function PublicProfile() {
   const params = useParams();
@@ -64,7 +96,7 @@ export default function PublicProfile() {
   const [badges, setBadges] = useState<Badge[]>([]);
 
   const [artworks, setArtworks] = useState<Artwork[]>([]);
-  const [page, setPage] = useState(0);
+  const [cursor, setCursor] = useState(0); // server cursor (activity for uploads, artworks for owned)
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
@@ -104,11 +136,11 @@ export default function PublicProfile() {
         .maybeSingle();
       setCounts({ posts: c?.posts ?? 0, followers: c?.followers ?? 0, following: c?.following ?? 0 });
 
-      const { data: b1, error: e1 } = await supabase
+      const { data: b1 } = await supabase
         .from("profile_badges_rows")
         .select("kind,label")
         .eq("user_id", profile.id);
-      if (!e1 && Array.isArray(b1) && b1.length) {
+      if (Array.isArray(b1) && b1.length) {
         setBadges((b1 as any[]).slice(0, 4) as Badge[]);
       } else {
         const { data: b2 } = await supabase
@@ -125,55 +157,82 @@ export default function PublicProfile() {
     })();
   }, [profile]);
 
-  function isRangeError(err: any) {
-    const code = err?.code || err?.details || err?.message;
-    return /PGRST116|range|Range Not Satisfiable/i.test(String(code));
-  }
-
   async function loadMore() {
-    if (!profile || loadingMore) return;
+    if (!profile || loadingMore || !hasMore) return;
     setLoadingMore(true);
 
-    const from = page * PAGE_SIZE;
-    const to = from + PAGE_SIZE - 1;
+    try {
+      if (tab === "artworks") {
+        // Page uploads by activity (minted by this user)
+        const from = cursor;
+        const to = from + PAGE_SIZE - 1;
+        const { data: acts, error, count } = await fetchMintedIdsPage(profile.id, from, to);
+        if (error) throw error;
 
-    let q = supabase
-      .from("artworks")
-      .select("id,title,cover_url,image_cid,created_at,creator,owner", { count: "exact" })
-      .eq("status", "published")
-      .order("created_at", { ascending: false });
+        const ids = (acts || []).map((a: any) => a.artwork_id);
+        if (ids.length === 0) {
+          setHasMore(false);
+          setLoadingMore(false);
+          return;
+        }
 
-    if (tab === "artworks") q = q.eq("creator", profile.id);
-    else if (tab === "purchased") q = q.eq("owner", profile.id).neq("creator", profile.id);
-    else {
-      setLoadingMore(false);
-      return;
-    }
+        const { data: rows, error: e2 } = await supabase
+          .from("artworks")
+          .select("id,title,cover_url,image_cid,created_at,owner")
+          .in("id", ids)
+          .eq("status", "published");
+        if (e2) throw e2;
 
-    const { data, count, error } = await q.range(from, to);
+        const map = new Map(rows?.map((r: any) => [r.id, r]));
+        const ordered: Artwork[] = ids.map((id) => map.get(id)).filter(Boolean) as Artwork[];
 
-    if (error) {
-      if (isRangeError(error)) {
-        setHasMore(false);
-        setLoadingMore(false);
-        return;
+        setArtworks((prev) => [...prev, ...ordered]);
+        setCursor(to + 1);
+        const total = typeof count === "number" ? count : from + ordered.length;
+        setHasMore(from + ids.length < total);
+      } else if (tab === "purchased") {
+        // Page owned artworks and drop those I minted
+        let from = cursor;
+        let to = from + PAGE_SIZE - 1;
+        let collected: Artwork[] = [];
+        let reachedEnd = false;
+
+        while (collected.length < PAGE_SIZE) {
+          const { data, error } = await fetchOwnedPage(profile.id, from, to);
+          if (error) throw error;
+
+          const rows = (data || []) as Artwork[];
+          if (rows.length === 0) { reachedEnd = true; break; }
+
+          const ids = rows.map((r) => r.id);
+          const mintedByMe = await getMintedByUserSet(ids, profile.id);
+          const purchased = rows.filter((r) => !mintedByMe.has(r.id));
+
+          collected = collected.concat(purchased);
+
+          from = to + 1;
+          to = from + PAGE_SIZE - 1;
+
+          if (collected.length >= PAGE_SIZE) break;
+        }
+
+        setArtworks((prev) => [...prev, ...collected]);
+        setCursor(from);
+        setHasMore(!reachedEnd && collected.length > 0);
       }
-      toast({ variant: "error", title: "Couldn’t load artworks", description: error.message || "Error" });
+    } catch (e: any) {
+      const msg = e?.message || e?.details || e?.hint || "Unknown error";
+      if (artworks.length === 0) {
+        toast({ variant: "error", title: "Couldn’t load artworks", description: msg });
+      }
+    } finally {
       setLoadingMore(false);
-      return;
     }
-
-    const rows = (data || []) as Artwork[];
-    setArtworks((prev) => [...prev, ...rows]);
-    setPage((p) => p + 1);
-    const total = typeof count === "number" ? count : 0;
-    setHasMore(from + rows.length < total);
-    setLoadingMore(false);
   }
 
-  // reset list when profile or tab changes
+  // Reset when profile or tab changes
   useEffect(() => {
-    setArtworks([]); setPage(0); setHasMore(true);
+    setArtworks([]); setCursor(0); setHasMore(true);
     if (profile && (tab === "artworks" || tab === "purchased")) loadMore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.id, tab]);
@@ -183,13 +242,11 @@ export default function PublicProfile() {
     [profile]
   );
 
-  // Social buttons
   const webUrl = useMemo(() => toWebUrl(profile?.website), [profile?.website]);
-  const igUrl = useMemo(() => toInstagramUrl(profile?.instagram), [profile?.instagram]);
-  const twUrl = useMemo(() => toTwitterUrl(profile?.twitter), [profile?.twitter]);
+  const igUrl  = useMemo(() => toInstagramUrl(profile?.instagram), [profile?.instagram]);
+  const twUrl  = useMemo(() => toTwitterUrl(profile?.twitter), [profile?.twitter]);
   const hasSocial = !!(webUrl || igUrl || twUrl);
 
-  // SEO
   useEffect(() => {
     if (!profile) return;
     const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -204,20 +261,18 @@ export default function PublicProfile() {
     });
   }, [profile, displayName]);
 
-  // Share handler
   async function handleShare() {
     if (!profile) return;
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     const url = profile.username ? `${origin}/u/${profile.username}` : origin;
     const title = `${displayName} on taedal`;
     try {
-      if (navigator.share) {
-        await navigator.share({ title, text: title, url });
-      } else {
+      if (navigator.share) await navigator.share({ title, text: title, url });
+      else {
         await navigator.clipboard.writeText(url);
         toast({ title: "Link copied", description: "Profile URL copied to clipboard." });
       }
-    } catch {/* ignore */}
+    } catch {}
   }
 
   if (loading) {
@@ -245,10 +300,7 @@ export default function PublicProfile() {
       <div className="p-8">
         <div className="mb-2 text-neutral-400">Profile “@{username}” not found.</div>
         {user && (
-          <Link
-            to="/settings"
-            className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900"
-          >
+          <Link to="/settings" className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900">
             Go to settings to set your username
           </Link>
         )}
@@ -280,7 +332,6 @@ export default function PublicProfile() {
             <h1 className="text-2xl font-semibold">{displayName}</h1>
             {profile.username && <div className="text-sm text-neutral-400">@{profile.username}</div>}
 
-            {/* badges */}
             {badges.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
                 {badges.map((b) => (
@@ -293,7 +344,6 @@ export default function PublicProfile() {
 
             {profile.bio && <p className="mt-2 max-w-3xl text-neutral-300">{profile.bio}</p>}
 
-            {/* Social links */}
             {hasSocial && (
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 {webUrl && (
@@ -437,16 +487,11 @@ export default function PublicProfile() {
 
           {tab === "likes" && <LikesGrid profileId={profile.id} />}
 
-          {tab === "collections" && (
-            <CollectionsGrid ownerId={profile.id} isOwner={false} />
-          )}
+          {tab === "collections" && <CollectionsGrid ownerId={profile.id} isOwner={false} />}
 
-          {tab === "activity" && (
-            <div className="text-neutral-400">Activity feed coming soon.</div>
-          )}
+          {tab === "activity" && <div className="text-neutral-400">Activity feed coming soon.</div>}
         </div>
 
-        {/* Suggestions rail */}
         <SuggestionsRail ownerId={profile.id} />
       </div>
     </div>
