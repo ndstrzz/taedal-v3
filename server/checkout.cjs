@@ -8,16 +8,16 @@ const { createClient } = require("@supabase/supabase-js");
 // -------- ENV --------
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
-
-// Your deployed frontend URL (used for success/cancel redirects)
 const FRONTEND_URL = (process.env.FRONTEND_URL || "https://taedal-v3.vercel.app").replace(/\/$/, "");
 
-// Supabase (admin) to read listings and mark them filled from webhook
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
 
-// Stripe + Supabase clients
+// Stripe client
 const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
+
+// Supabase admin (DB writes) + public (to verify Authorization token)
 const sbAdmin =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
@@ -25,7 +25,28 @@ const sbAdmin =
       })
     : null;
 
-// Helper to build absolute URLs to your frontend
+const sbPublic =
+  SUPABASE_URL && SUPABASE_ANON_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+    : null;
+
+// Helper to read current user from Authorization: Bearer <token>
+async function getUserFromRequest(req) {
+  try {
+    if (!sbPublic) return null;
+    const auth = req.headers.authorization || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+    if (!token) return null;
+    const { data, error } = await sbPublic.auth.getUser(token);
+    if (error || !data?.user) return null;
+    return data.user;
+  } catch {
+    return null;
+  }
+}
+
 const feUrl = (path = "") => `${FRONTEND_URL}/${String(path).replace(/^\//, "")}`;
 
 // ---------- Health ----------
@@ -41,34 +62,30 @@ router.get("/health", (_req, res) => {
 /**
  * POST /api/checkout/create-stripe-session
  *
- * Two accepted payloads:
- * 1) Existing listing:
- *    { "listing_id": "uuid" }
- *
- * 2) Direct amount (no listing yet):
- *    {
- *      "amount": 12,          // dollars (NOT cents)
- *      "currency": "usd",     // must be "usd" for card
- *      "name": "Artwork title" (optional)
- *    }
+ * Accepts:
+ * - { listing_id: "uuid" }  -> reads listing from DB
+ * - { amount: number, currency: "usd", name?: string }  -> direct amount flow
  */
 router.post("/create-stripe-session", async (req, res) => {
   try {
     if (!stripe) return res.status(501).json({ error: "Stripe not configured" });
 
+    const user = await getUserFromRequest(req); // who is paying
+    const buyerId = user?.id || null;
+
     const {
-      listing_id,          // string (optional)
-      amount,              // number in dollars (optional when listing_id is sent)
-      currency = "usd",    // string
-      name = "Artwork",    // product name
+      listing_id,
+      amount,
+      currency = "usd",
+      name = "Artwork",
     } = req.body || {};
 
     let unitAmountCents;
     let usedCurrency = String(currency).toLowerCase();
     let productName = String(name || "Artwork");
-    let metadata = {};
+    const metadata = {};
 
-    // ---- Path A: Use a server-authoritative listing ----
+    // Path A: checkout from server-authoritative listing
     if (listing_id) {
       if (!sbAdmin) return res.status(500).json({ error: "Supabase admin not configured" });
 
@@ -81,23 +98,22 @@ router.post("/create-stripe-session", async (req, res) => {
       if (error || !listing) return res.status(404).json({ error: "Listing not found" });
       if (listing.status !== "active") return res.status(400).json({ error: "Listing not active" });
 
-      // We only allow Stripe card checkout for USD
       const ccy = String(listing.currency || "").toLowerCase();
-      if (ccy !== "usd") {
-        return res.status(400).json({ error: "Card checkout allowed only for USD listings" });
-      }
+      if (ccy !== "usd") return res.status(400).json({ error: "Card checkout allowed only for USD listings" });
 
-      // price (USD dollars) → cents
       const dollars = Number(listing.price ?? listing.price_eth);
       if (!Number.isFinite(dollars) || dollars <= 0) {
         return res.status(400).json({ error: "Invalid listing price" });
       }
+
       unitAmountCents = Math.round(dollars * 100);
       usedCurrency = "usd";
-      metadata = { listing_id: listing.id, artwork_id: listing.artwork_id || "" };
-    }
-    // ---- Path B: Direct amount (no listing yet) ----
-    else {
+
+      metadata.listing_id = listing.id;
+      metadata.artwork_id = listing.artwork_id || "";
+      if (buyerId) metadata.buyer_id = buyerId;
+    } else {
+      // Path B: direct amount (no listing)
       if (usedCurrency !== "usd") {
         return res.status(400).json({ error: "Card checkout allowed only for USD currency" });
       }
@@ -105,19 +121,18 @@ router.post("/create-stripe-session", async (req, res) => {
       if (!Number.isFinite(dollars) || dollars <= 0) {
         return res.status(400).json({ error: "Invalid amount" });
       }
-      unitAmountCents = Math.round(dollars * 100); // dollars → cents
-      metadata = {}; // no listing_id
+      unitAmountCents = Math.round(dollars * 100);
+      if (buyerId) metadata.buyer_id = buyerId;
     }
 
-    // Create Stripe Checkout Session
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
       line_items: [
         {
           price_data: {
-            currency: usedCurrency,          // "usd"
-            unit_amount: unitAmountCents,    // integer cents
+            currency: usedCurrency,
+            unit_amount: unitAmountCents,
             product_data: { name: productName },
           },
           quantity: 1,
@@ -138,27 +153,20 @@ router.post("/create-stripe-session", async (req, res) => {
   }
 });
 
-/**
- * (Optional) Crypto checkout stub.
- * Implement with your provider (e.g., Coinbase Commerce) or keep as 501.
- */
+// Optional crypto stub
 router.post("/create-crypto-intent", async (_req, res) => {
   return res.status(501).json({ error: "Crypto checkout not configured" });
 });
 
-// ---------- Webhook (exported for index.cjs to mount with express.raw) ----------
+// ---------- Webhook ----------
 async function webhook(req, res) {
-  if (!STRIPE_WEBHOOK_SECRET) {
-    // If not configured, respond 501 so Stripe will retry later.
-    return res.status(501).send("Webhook not configured");
-  }
+  if (!STRIPE_WEBHOOK_SECRET) return res.status(501).send("Webhook not configured");
   if (!stripe) return res.status(501).send("Stripe not configured");
 
   const sig = req.headers["stripe-signature"];
   let event;
 
   try {
-    // req.body is raw Buffer because index.cjs mounts this with express.raw({ type: "application/json" })
     event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
   } catch (err) {
     console.error("[stripe] webhook signature verification failed:", err.message);
@@ -166,43 +174,49 @@ async function webhook(req, res) {
   }
 
   try {
-    switch (event.type) {
-      case "checkout.session.completed": {
-        const session = event.data.object;
-        const listingId = session.metadata?.listing_id;
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
 
-        // If this purchase was tied to a listing, mark it filled
-        if (listingId && sbAdmin) {
-          const { data, error } = await sbAdmin
-            .from("listings")
-            .update({
-              status: "filled",
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", listingId)
-            .select("*")
-            .single();
+      const listingId = session.metadata?.listing_id || null;
+      const artworkId = session.metadata?.artwork_id || null;
+      const buyerId = session.metadata?.buyer_id || null;
 
-          if (error) {
-            console.error("[webhook] supabase update failed:", error);
-          } else {
-            // Record activity row (optional)
-            await sbAdmin.from("activity").insert({
-              artwork_id: data.artwork_id,
-              kind: "buy",
-              actor: session.customer || "stripe",
-              tx_hash: session.payment_intent || null,
-              note: `Card checkout via Stripe: ${String(session.currency || "usd").toUpperCase()} ${(
-                (session.amount_total || 0) / 100
-              ).toFixed(2)}`,
-            });
+      const amountTotal = Number(session.amount_total || 0);
+      const currency = String(session.currency || "usd").toUpperCase();
+      const paidDisplay = `${currency} ${(amountTotal / 100).toFixed(2)}`;
+
+      if (listingId && sbAdmin) {
+        // 1) mark listing filled
+        const { data: lst, error: e1 } = await sbAdmin
+          .from("listings")
+          .update({ status: "filled", updated_at: new Date().toISOString() })
+          .eq("id", listingId)
+          .select("*")
+          .single();
+
+        if (e1) {
+          console.error("[webhook] listings update failed:", e1);
+        } else {
+          // 2) transfer ownership if we know buyer + artwork
+          if (buyerId && artworkId) {
+            const { error: e2 } = await sbAdmin
+              .from("artworks")
+              .update({ owner: buyerId, updated_at: new Date().toISOString() })
+              .eq("id", artworkId);
+            if (e2) console.error("[webhook] transfer ownership failed:", e2);
           }
+
+          // 3) record activity
+          await sbAdmin.from("activity").insert({
+            artwork_id: artworkId || lst.artwork_id,
+            kind: "buy",
+            actor: buyerId || (session.customer || "stripe"),
+            tx_hash: session.payment_intent || null,
+            note: `Card checkout via Stripe: ${paidDisplay}`,
+            price_eth: null,
+          });
         }
-        break;
       }
-      default:
-        // handle other events if needed
-        break;
     }
 
     return res.status(200).send("ok");
@@ -212,12 +226,11 @@ async function webhook(req, res) {
   }
 }
 
-// Lookup a Stripe Checkout Session by id
+// Lookup session details
 router.get("/session", async (req, res) => {
   try {
     if (!stripe) return res.status(501).json({ error: "Stripe not configured" });
-    const sid =
-      String(req.query.session_id || req.query.sid || "").trim();
+    const sid = String(req.query.session_id || req.query.sid || "").trim();
     if (!sid) return res.status(400).json({ error: "Missing session_id" });
 
     const session = await stripe.checkout.sessions.retrieve(sid, {

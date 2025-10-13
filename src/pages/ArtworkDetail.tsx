@@ -151,12 +151,13 @@ export default function ArtworkDetail() {
 
   async function refetchAll() { if (!id) return; await Promise.all([fetchListing(id), fetchActivity(id)]); }
 
-  // Build media source candidates (multiple gateways) + poster fallback
+  // Media candidates (multi-gateway) + poster
   const poster = art?.cover_url || DEFAULT_COVER_URL;
+
   const imageCandidates = useMemo(() => {
     if (art?.media_kind === "video") return [] as string[];
     if (art?.image_cid) return ipfsCandidates(`ipfs://${art.image_cid}`);
-    if (meta?.image)    return ipfsCandidates(meta.image);
+    if (meta?.image) return ipfsCandidates(meta.image);
     return poster ? [poster] : [];
   }, [art?.media_kind, art?.image_cid, meta?.image, poster]);
 
@@ -167,7 +168,6 @@ export default function ArtworkDetail() {
     return [];
   }, [art?.media_kind, art?.animation_cid, meta?.animation_url]);
 
-  // index states to rotate through gateways on errors
   const [imgIdx, setImgIdx] = useState(0);
   const [vidIdx, setVidIdx] = useState(0);
 
@@ -199,7 +199,7 @@ export default function ArtworkDetail() {
         method: "POST",
         body: JSON.stringify({
           artwork_id: art.id,
-          price: 123,              // placeholder; replace with UI later
+          price: 123,
           currency: "USD",
         }),
       });
@@ -241,12 +241,11 @@ export default function ArtworkDetail() {
               src={imageCandidates[imgIdx] || poster}
               alt={title}
               className="h-full w-full object-contain"
-              onError={() => {
+              onError={(e) => {
                 const next = imgIdx + 1;
                 if (next < imageCandidates.length) setImgIdx(next);
-                else if (imageCandidates[imgIdx] !== poster) {
-                  // Final fallback to poster
-                  (e => ((e.target as HTMLImageElement).src = poster)) as any;
+                else if ((e.currentTarget.src || "") !== poster) {
+                  e.currentTarget.src = poster;
                 }
               }}
             />
@@ -262,7 +261,9 @@ export default function ArtworkDetail() {
               <Link to={`/u/${art.owner}`} className="text-neutral-200 hover:underline">
                 {art.owner.slice(0, 6)}…{art.owner.slice(-4)}
               </Link>
-            ) : ("unknown")}
+            ) : (
+              "unknown"
+            )}
           </div>
 
           <div className="mt-4 rounded-2xl border border-neutral-800 p-4">
@@ -277,19 +278,26 @@ export default function ArtworkDetail() {
 
             <div className="mt-3 flex gap-2">
               {!isOwner && (
-                <button className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
-                  disabled={!canBuy} onClick={handleBuyClick}>
+                <button
+                  className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
+                  disabled={!canBuy}
+                  onClick={handleBuyClick}
+                >
                   Buy now
                 </button>
               )}
               {isOwner && !listingId && (
-                <button className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
-                  onClick={ownerListForSaleUSD}>
+                <button
+                  className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
+                  onClick={ownerListForSaleUSD}
+                >
                   List for sale (USD)
                 </button>
               )}
-              <button className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
-                onClick={() => setShowOffer(true)}>
+              <button
+                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
+                onClick={() => setShowOffer(true)}
+              >
                 Make offer
               </button>
             </div>
@@ -301,9 +309,11 @@ export default function ArtworkDetail() {
           {/* Tabs */}
           <div className="mt-6 flex gap-2">
             {(["details", "activity"] as const).map((t) => (
-              <button key={t}
+              <button
+                key={t}
                 className={`rounded-full border px-3 py-1 text-sm capitalize ${tab === t ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"}`}
-                onClick={() => setTab(t)}>
+                onClick={() => setTab(t)}
+              >
                 {t}
               </button>
             ))}
@@ -369,7 +379,6 @@ export default function ArtworkDetail() {
         {attributes.length ? (
           <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
             {attributes.map((t, i) => {
-              const key = `${t.trait_type}::${String(t.value)}`;
               const s = traitStats.find((x) => x.trait_type === t.trait_type && x.value === String(t.value));
               const pct = s ? Math.round((s.freq || 0) * 1000) / 10 : null;
               return (
@@ -410,7 +419,7 @@ export default function ArtworkDetail() {
           title={title}
           price={String(currentPrice)}
           currency={currentCurrency}
-          imageUrl={(imageCandidates[imgIdx] || poster)}
+          imageUrl={imageCandidates[imgIdx] || poster}
         />
       )}
       {showOffer && (
