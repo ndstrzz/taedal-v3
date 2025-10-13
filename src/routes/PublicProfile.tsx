@@ -38,41 +38,20 @@ type Badge = { kind: string; label: string };
 const PAGE_SIZE = 12;
 const ipfs = (cid?: string | null) => (cid ? `https://ipfs.io/ipfs/${cid}` : "");
 
-// icons
-const GlobeIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" {...p}><path fill="currentColor" d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2Zm7.93 9h-3.09a15.7 15.7 0 0 0-1.15-5.01A8.03 8.03 0 0 1 19.93 11ZM12 4c.9 0 2.3 2.04 2.92 6H9.08C9.7 6.04 11.1 4 12 4ZM8.31 6a15.7 15.7 0 0 0-1.16 5H4.07A8.03 8.03 0 0 1 8.31 6ZM4.07 13h3.08c.12 1.77.5 3.5 1.16 5a8.03 8.03 0 0 1-4.24-5Zm4.99 0h6c-.62 3.96-2.02 6-3 6s-2.38-2.04-3-6Zm6.63 5c.66-1.5 1.04-3.23 1.16-5h3.08a8.03 8.03 0 0 1-4.24 5Z"/></svg>);
-const IgIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" {...p}><path fill="currentColor" d="M7 2h10a5 5 0 0 1 5 5v10a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V7a5 5 0 0 1 5-5Zm0 2a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3H7Zm5 3a6 6 0 1 1 0 12 6 6 0 0 1 0-12Zm0 2.5A3.5 3.5 0 1 0 12 17a3.5 3.5 0 0 0 0-7.5ZM18 6.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/></svg>);
-const XIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" {...p}><path fill="currentColor" d="M3 3h4.6l4.7 6.5L17.9 3H21l-7.3 9.2L21.4 21H16.8l-5-6.9L8.1 21H3l7.7-9.8L3 3Z"/></svg>);
-const ShareIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" {...p}><path fill="currentColor" d="M14 3l7 7-1.41 1.41L15 6.83V17a5 5 0 0 1-5 5H5v-2h5a3 3 0 0 0 3-3V6.83l-4.59 4.58L7 10l7-7Z"/></svg>);
+// tiny icons
+const GlobeIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...p}><path fill="currentColor" d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2Zm7.93 9h-3.09a15.7 15.7 0 0 0-1.15-5.01A8.03 8.03 0 0 1 19.93 11ZM12 4c.9 0 2.3 2.04 2.92 6H9.08C9.7 6.04 11.1 4 12 4ZM8.31 6a15.7 15.7 0 0 0-1.16 5H4.07A8.03 8.03 0 0 1 8.31 6ZM4.07 13h3.08c.12 1.77.5 3.5 1.16 5a8.03 8.03 0 0 1-4.24-5Zm4.99 0h6c-.62 3.96-2.02 6-3 6s-2.38-2.04-3-6Zm6.63 5c.66-1.5 1.04-3.23 1.16-5h3.08a8.03 8.03 0 0 1-4.24 5Z"/></svg>);
+const IgIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...p}><path fill="currentColor" d="M7 2h10a5 5 0 0 1 5 5v10a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V7a5 5 0 0 1 5-5Zm0 2a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3H7Zm5 3a6 6 0 1 1 0 12 6 6 0 0 1 0-12Zm0 2.5A3.5 3.5 0 1 0 12 17a3.5 3.5 0 0 0 0-7.5ZM18 6.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/></svg>);
+const XIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...p}><path fill="currentColor" d="M3 3h4.6l4.7 6.5L17.9 3H21l-7.3 9.2L21.4 21H16.8l-5-6.9L8.1 21H3l7.7-9.8L3 3Z"/></svg>);
+const ShareIcon = (p: React.SVGProps<SVGSVGElement>) => (<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...p}><path fill="currentColor" d="M14 3l7 7-1.41 1.41L15 6.83V17a5 5 0 0 1-5 5H5v-2h5a3 3 0 0 0 3-3V6.83l-4.59 4.58L7 10l7-7Z"/></svg>);
 
-// url builders
+// helpers
 function toWebUrl(s?: string | null) { if (!s) return null; const t=s.trim(); if(!t) return null; if(/^https?:\/\//i.test(t)) return t; return `https://${t}`; }
 function toInstagramUrl(s?: string | null) { if (!s) return null; const t=s.trim().replace(/^@/,""); if(!t) return null; if(/^https?:\/\//i.test(t)) return t; return `https://instagram.com/${encodeURIComponent(t)}`; }
 function toTwitterUrl(s?: string | null) { if (!s) return null; const t=s.trim().replace(/^@/,""); if(!t) return null; if(/^https?:\/\//i.test(t)) return t; return `https://twitter.com/${encodeURIComponent(t)}`; }
 
-function looksLikeMissingCreator(err: any) {
-  const msg = String(err?.message || err?.hint || err?.details || err);
-  return /creator["\)]?\s+does not exist|column "creator" does not exist/i.test(msg);
-}
-
-async function getMintedByUserSet(artworkIds: string[], userId: string) {
-  if (!artworkIds.length) return new Set<string>();
-  const { data, error } = await supabase
-    .from("activity")
-    .select("artwork_id")
-    .eq("kind", "mint")
-    .eq("actor", userId)
-    .in("artwork_id", artworkIds);
-  if (error) return new Set<string>();
-  return new Set<string>((data || []).map((r: any) => r.artwork_id));
-}
-async function fetchOwnedPage(userId: string, from: number, to: number) {
-  return await supabase
-    .from("artworks")
-    .select("id,title,cover_url,image_cid,created_at,owner", { count: "exact" })
-    .eq("owner", userId)
-    .eq("status", "published")
-    .order("created_at", { ascending: false })
-    .range(from, to);
+function missingCreator(err: any) {
+  const s = String(err?.message || err?.hint || err?.details || err || "");
+  return /column\s+"?creator"?\s+does not exist/i.test(s);
 }
 
 export default function PublicProfile() {
@@ -88,7 +67,6 @@ export default function PublicProfile() {
   const [loading, setLoading] = useState(true);
   const [counts, setCounts] = useState<Counts>({ posts: 0, followers: 0, following: 0 });
   const [badges, setBadges] = useState<Badge[]>([]);
-  const [hasCreator, setHasCreator] = useState<boolean | null>(null);
 
   const [artworks, setArtworks] = useState<Artwork[]>([]);
   const [page, setPage] = useState(0);
@@ -97,7 +75,7 @@ export default function PublicProfile() {
 
   const [showModal, setShowModal] = useState<null | "followers" | "following">(null);
 
-  // Load profile
+  // profile
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -120,7 +98,7 @@ export default function PublicProfile() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [username]);
 
-  // Counts + badges
+  // counts + badges
   useEffect(() => {
     if (!profile) return;
     (async () => {
@@ -131,12 +109,12 @@ export default function PublicProfile() {
         .maybeSingle();
       setCounts({ posts: c?.posts ?? 0, followers: c?.followers ?? 0, following: c?.following ?? 0 });
 
-      const { data: b1, error: e1 } = await supabase
+      const { data: b1 } = await supabase
         .from("profile_badges_rows")
         .select("kind,label")
         .eq("user_id", profile.id);
 
-      if (!e1 && Array.isArray(b1) && b1.length) {
+      if (Array.isArray(b1) && b1.length) {
         setBadges((b1 as any[]).slice(0, 4) as Badge[]);
       } else {
         const { data: b2 } = await supabase
@@ -145,29 +123,15 @@ export default function PublicProfile() {
           .eq("user_id", profile.id)
           .maybeSingle();
         const list: Badge[] = [];
-        if ((b2 as any)?.verified) list.push({ kind: "verified", label: "Verified" });
-        if ((b2 as any)?.staff) list.push({ kind: "staff", label: "Staff" });
+        if ((b2 as any)?.verified)   list.push({ kind: "verified",   label: "Verified" });
+        if ((b2 as any)?.staff)      list.push({ kind: "staff",      label: "Staff" });
         if ((b2 as any)?.top_seller) list.push({ kind: "top_seller", label: "Top seller" });
         setBadges(list);
       }
     })();
   }, [profile]);
 
-  // probe creator once
-  useEffect(() => {
-    (async () => {
-      if (hasCreator !== null) return;
-      try {
-        const { error } = await supabase.from("artworks").select("id,creator").limit(1);
-        if (error && looksLikeMissingCreator(error)) setHasCreator(false);
-        else setHasCreator(true);
-      } catch {
-        setHasCreator(false);
-      }
-    })();
-  }, [hasCreator]);
-
-  // Artworks pagination
+  // loadMore
   async function loadMore() {
     if (!profile || loadingMore) return;
     setLoadingMore(true);
@@ -175,87 +139,63 @@ export default function PublicProfile() {
     const from = page * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
 
+    const base = supabase
+      .from("artworks")
+      .select("id,title,cover_url,image_cid,created_at,creator,owner", { count: "exact" })
+      .eq("status", "published")
+      .order("created_at", { ascending: false });
+
     try {
-      if (hasCreator) {
-        let q = supabase
-          .from("artworks")
-          .select("id,title,cover_url,image_cid,created_at,creator,owner", { count: "exact" })
-          .eq("status", "published")
-          .order("created_at", { ascending: false });
-
-        if (tab === "artworks") q = q.eq("creator", profile.id);
-        else if (tab === "purchased") q = q.eq("owner", profile.id).neq("creator", profile.id);
-        else { setLoadingMore(false); return; }
-
-        const { data, count, error } = await q.range(from, to);
-        if (error) throw error;
-
-        const rows = (data || []) as Artwork[];
-        setArtworks(prev => [...prev, ...rows]);
-        setPage(p => p + 1);
-        const total = typeof count === "number" ? count : 0;
-        setHasMore(from + rows.length < total);
+      let q = base;
+      if (tab === "artworks") {
+        q = q.eq("creator", profile.id);
+      } else if (tab === "purchased") {
+        q = q.eq("owner", profile.id).neq("creator", profile.id);
+      } else {
         setLoadingMore(false);
         return;
       }
 
-      // fallback mode: owned -> classify by activity
-      let collected: Artwork[] = [];
-      let localFrom = from;
-      let localTo = to;
-
-      while (collected.length < PAGE_SIZE) {
-        const { data, count, error } = await fetchOwnedPage(profile.id, localFrom, localTo);
-        if (error) throw error;
-
-        const rows = (data || []) as Artwork[];
-        if (rows.length === 0) {
-          const total = typeof count === "number" ? count : 0;
-          setHasMore(localFrom < total);
-          break;
+      const { data, error, count } = await q.range(from, to);
+      if (error) {
+        if (missingCreator(error)) {
+          toast({
+            variant: "error",
+            title: "Database needs a quick migration",
+            description:
+              "Add a `creator` column to artworks and backfill it (see migration I sent). For now, Purchased cannot be computed accurately.",
+          });
+        } else {
+          toast({ variant: "error", title: "Couldn’t load artworks", description: error.message });
         }
-
-        const ids = rows.map(r => r.id);
-        const mintedByUser = await getMintedByUserSet(ids, profile.id);
-
-        const filtered = rows.filter(r => {
-          const isUploaded = mintedByUser.has(r.id);
-          return tab === "artworks" ? isUploaded : tab === "purchased" ? !isUploaded : false;
-        });
-
-        collected = collected.concat(filtered);
-
-        localFrom = localTo + 1;
-        localTo = localFrom + PAGE_SIZE - 1;
-
-        const total = typeof count === "number" ? count : undefined;
-        if (typeof total === "number" && localFrom >= total) break;
+        setLoadingMore(false);
+        return;
       }
 
-      setArtworks(prev => [...prev, ...collected]);
-      setPage(p => p + 1);
-      setHasMore(collected.length === PAGE_SIZE);
-    } catch (e: any) {
-      const msg = e?.message || e?.details || e?.hint || "Unknown error";
-      if (page === 0) toast({ variant: "error", title: "Couldn’t load artworks", description: msg });
+      const rows = (data || []) as Artwork[];
+      setArtworks((prev) => [...prev, ...rows]);
+      setPage((p) => p + 1);
+
+      const total = typeof count === "number" ? count : 0;
+      setHasMore(from + rows.length < total);
     } finally {
       setLoadingMore(false);
     }
   }
 
-  // Reset list when profile/tab changes
+  // reset on tab/profile change
   useEffect(() => {
     setArtworks([]); setPage(0); setHasMore(true);
     if (profile && (tab === "artworks" || tab === "purchased")) loadMore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile?.id, tab, hasCreator]);
+  }, [profile?.id, tab]);
 
   const displayName = useMemo(
     () => profile?.display_name || (profile?.username ? `@${profile.username}` : "Artist"),
     [profile]
   );
 
-  // Social buttons
+  // social buttons
   const webUrl = useMemo(() => toWebUrl(profile?.website), [profile?.website]);
   const igUrl = useMemo(() => toInstagramUrl(profile?.instagram), [profile?.instagram]);
   const twUrl = useMemo(() => toTwitterUrl(profile?.twitter), [profile?.twitter]);
@@ -276,7 +216,6 @@ export default function PublicProfile() {
     });
   }, [profile, displayName]);
 
-  // Share handler
   async function handleShare() {
     if (!profile) return;
     const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -351,7 +290,6 @@ export default function PublicProfile() {
             <h1 className="text-2xl font-semibold">{displayName}</h1>
             {profile.username && <div className="text-sm text-neutral-400">@{profile.username}</div>}
 
-            {/* badges */}
             {badges.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
                 {badges.map((b) => (
@@ -364,7 +302,6 @@ export default function PublicProfile() {
 
             {profile.bio && <p className="mt-2 max-w-3xl text-neutral-300">{profile.bio}</p>}
 
-            {/* Social links */}
             {hasSocial && (
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 {webUrl && (
@@ -507,7 +444,9 @@ export default function PublicProfile() {
           )}
 
           {tab === "likes" && <LikesGrid profileId={profile.id} />}
+
           {tab === "collections" && <CollectionsGrid ownerId={profile.id} isOwner={false} />}
+
           {tab === "activity" && <div className="text-neutral-400">Activity feed coming soon.</div>}
         </div>
 
