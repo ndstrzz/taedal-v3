@@ -35,38 +35,8 @@ type Counts = { posts: number; followers: number; following: number };
 const PAGE_SIZE = 12;
 const ipfs = (cid?: string | null) => (cid ? `https://ipfs.io/ipfs/${cid}` : "");
 
-async function getMintedByUserSet(artworkIds: string[], userId: string) {
-  if (!artworkIds.length) return new Set<string>();
-  const { data, error } = await supabase
-    .from("activity")
-    .select("artwork_id")
-    .eq("kind", "mint")
-    .eq("actor", userId)
-    .in("artwork_id", artworkIds);
+// --- Helpers --------------------------------------------------------------
 
-  if (error) {
-    return new Set<string>();
-  }
-  return new Set<string>((data || []).map((r: any) => r.artwork_id));
-}
-
-async function fetchOwnedPage(userId: string, from: number, to: number) {
-  return await supabase
-    .from("artworks")
-    .select("id,title,cover_url,image_cid,created_at,owner", { count: "exact" })
-    .eq("owner", userId)
-    .eq("status", "published")
-    .order("created_at", { ascending: false })
-    .range(from, to);
-}
-
-
-function looksLikeMissingCreator(err: any) {
-  const msg = String(err?.message || err?.hint || err?.details || err);
-  return /creator["\)]?\s+does not exist|column "creator" does not exist/i.test(msg);
-}
-
-// URL helpers
 function toWebUrl(s?: string | null) {
   if (!s) return null;
   const t = s.trim();
@@ -88,28 +58,61 @@ function toTwitterUrl(s?: string | null) {
   if (/^https?:\/\//i.test(t)) return t;
   return `https://twitter.com/${encodeURIComponent(t)}`;
 }
+function looksLikeMissingCreator(err: any) {
+  const msg = String(err?.message || err?.hint || err?.details || err);
+  return /column\s+"?creator"?\s+does not exist|creator["\)]?\s+does not exist/i.test(msg);
+}
 
+// Set of artwork IDs minted by user (via activity table)
+async function getMintedByUserSet(artworkIds: string[], userId: string) {
+  if (!artworkIds.length) return new Set<string>();
+  const { data, error } = await supabase
+    .from("activity")
+    .select("artwork_id")
+    .eq("kind", "mint")
+    .eq("actor", userId)
+    .in("artwork_id", artworkIds);
+  if (error) return new Set<string>();
+  return new Set<string>((data || []).map((r: any) => r.artwork_id));
+}
+
+// Server page of owned artworks
+async function fetchOwnedPage(userId: string, from: number, to: number) {
+  return await supabase
+    .from("artworks")
+    .select("id,title,cover_url,image_cid,created_at,owner,creator", { count: "exact" })
+    .eq("owner", userId)
+    .eq("status", "published")
+    .order("created_at", { ascending: false })
+    .range(from, to);
+}
+
+// -------------------------------------------------------------------------
 // Inline icons
 const GlobeIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
     <path fill="currentColor" d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2Zm7.93 9h-3.09a15.7 15.7 0 0 0-1.15-5.01A8.03 8.03 0 0 1 19.93 11ZM12 4c.9 0 2.3 2.04 2.92 6H9.08C9.7 6.04 11.1 4 12 4ZM8.31 6a15.7 15.7 0 0 0-1.16 5H4.07A8.03 8.03 0 0 1 8.31 6ZM4.07 13h3.08c.12 1.77.5 3.5 1.16 5a8.03 8.03 0 0 1-4.24-5Zm4.99 0h6c-.62 3.96-2.02 6-3 6s-2.38-2.04-3-6Zm6.63 5c.66-1.5 1.04-3.23 1.16-5h3.08a8.03 8.03 0 0 1-4.24 5Z"/>
   </svg>
 );
+
 const IgIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
     <path fill="currentColor" d="M7 2h10a5 5 0 0 1 5 5v10a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V7a5 5 0 0 1 5-5Zm0 2a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3H7Zm5 3a6 6 0 1 1 0 12 6 6 0 0 1 0-12Zm0 2.5A3.5 3.5 0 1 0 12 17a3.5 3.5 0 0 0 0-7.5ZM18 6.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/>
   </svg>
 );
+
 const XIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
     <path fill="currentColor" d="M3 3h4.6l4.7 6.5L17.9 3H21l-7.3 9.2L21.4 21H16.8l-5-6.9L8.1 21H3l7.7-9.8L3 3Z"/>
   </svg>
 );
+
 const ShareIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
     <path fill="currentColor" d="M14 3l7 7-1.41 1.41L15 6.83V17a5 5 0 0 1-5 5H5v-2h5a3 3 0 0 0 3-3V6.83l-4.59 4.58L7 10l7-7Z"/>
   </svg>
 );
+
 
 export default function MyProfile() {
   const { user } = useAuth();
@@ -126,6 +129,7 @@ export default function MyProfile() {
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
+  const [creatorAvailable, setCreatorAvailable] = useState<boolean | null>(null);
   const [showModal, setShowModal] = useState<null | "followers" | "following">(null);
 
   useEffect(() => {
@@ -159,65 +163,93 @@ export default function MyProfile() {
     })();
   }, [profile]);
 
+  // Core pager: fills one UI page regardless of how many rows get filtered
   async function loadMore() {
-  if (!profile || loadingMore) return;
-  setLoadingMore(true);
+    if (!profile || loadingMore) return;
+    setLoadingMore(true);
 
-  const wantUploaded  = tab === "artworks";
-  const wantPurchased = tab === "purchased";
+    const wantUploaded = tab === "artworks";
+    const wantPurchased = tab === "purchased";
 
-  try {
-    let collected: Artwork[] = [];
-    let localFrom = page * PAGE_SIZE;
-    let localTo   = localFrom + PAGE_SIZE - 1;
+    try {
+      let collected: Artwork[] = [];
+      let localFrom = page * PAGE_SIZE;
+      let localTo = localFrom + PAGE_SIZE - 1;
+      let serverHasMore = false;
 
-    while (collected.length < PAGE_SIZE) {
-      const { data, count, error } = await fetchOwnedPage(profile.id, localFrom, localTo);
-      if (error) throw error;
+      while (collected.length < PAGE_SIZE) {
+        const { data, count, error } = await fetchOwnedPage(profile.id, localFrom, localTo);
+        if (error) throw error;
 
-      const rows = (data || []) as Artwork[];
-      if (rows.length === 0) {
-        const total = typeof count === "number" ? count : 0;
-        setHasMore(localFrom < total);
-        break;
+        const rows = (data || []) as Artwork[];
+        const total = typeof count === "number" ? count : undefined;
+
+        if (rows.length === 0) {
+          serverHasMore = false;
+          break;
+        }
+
+        // First try using creator column if present
+        let filtered: Artwork[] | null = null;
+        if (creatorAvailable !== false) {
+          try {
+            if (wantUploaded) {
+              filtered = rows.filter(r => r.creator && r.creator === profile.id);
+            } else if (wantPurchased) {
+              filtered = rows.filter(r => r.owner === profile.id && r.creator !== profile.id);
+            }
+            if (creatorAvailable === null) setCreatorAvailable(true);
+          } catch (e: any) {
+            if (looksLikeMissingCreator(e)) {
+              setCreatorAvailable(false);
+              filtered = null; // fall through to activity-based check
+            } else {
+              throw e;
+            }
+          }
+        }
+
+        // Fallback to activity table if creator missing
+        if (!filtered) {
+          const mintedByMe = await getMintedByUserSet(rows.map(r => r.id), profile.id);
+          filtered = rows.filter(r => {
+            const isUploaded = mintedByMe.has(r.id);
+            if (wantUploaded) return isUploaded;
+            if (wantPurchased) return !isUploaded;
+            return false;
+          });
+        }
+
+        collected = collected.concat(filtered);
+
+        // Advance server window regardless of how many matched
+        localFrom = localTo + 1;
+        localTo = localFrom + PAGE_SIZE - 1;
+
+        // Decide if there's still anything left server-side
+        serverHasMore = typeof total === "number" ? localFrom < total : rows.length === PAGE_SIZE;
+        if (!serverHasMore) break;
+
+        // Stop early once we filled the page
+        if (collected.length >= PAGE_SIZE) break;
       }
 
-      const ids = rows.map(r => r.id);
-      const mintedByMe = await getMintedByUserSet(ids, profile.id);
-
-      const filtered = rows.filter(r => {
-        const isUploaded = mintedByMe.has(r.id);
-        if (wantUploaded)  return isUploaded;
-        if (wantPurchased) return !isUploaded;
-        return false;
-      });
-
-      collected = collected.concat(filtered);
-
-      // advance the server window
-      localFrom = localTo + 1;
-      localTo   = localFrom + PAGE_SIZE - 1;
-
-      const total = typeof count === "number" ? count : undefined;
-      if (typeof total === "number" && localFrom >= total) break;
+      setArtworks(prev => [...prev, ...collected]);
+      setPage(p => p + 1);
+      setHasMore(collected.length >= PAGE_SIZE || serverHasMore);
+    } catch (e: any) {
+      const msg = e?.message || e?.details || e?.hint || "Unknown error";
+      if (page === 0) toast({ variant: "error", title: "Couldn’t load artworks", description: msg });
+    } finally {
+      setLoadingMore(false);
     }
-
-    setArtworks(prev => [...prev, ...collected]);
-    setPage(p => p + 1);
-    setHasMore(collected.length === PAGE_SIZE);
-  } catch (e: any) {
-    const msg = e?.message || e?.details || e?.hint || "Unknown error";
-    if (page === 0) toast({ variant: "error", title: "Couldn’t load artworks", description: msg });
-  } finally {
-    setLoadingMore(false);
   }
-}
-
-
 
   // reset grid when tab/profile changes
   useEffect(() => {
-    setArtworks([]); setPage(0); setHasMore(true);
+    setArtworks([]);
+    setPage(0);
+    setHasMore(true);
     if (profile && (tab === "artworks" || tab === "purchased")) loadMore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.id, tab]);
@@ -264,7 +296,7 @@ export default function MyProfile() {
       <div>
         <div className="h-48 w-full bg-neutral-900" />
         <div className="mx-auto -mt-12 max-w-6xl px-4">
-          <div className="flex items-end gap-4">
+          <div className="flex items=end gap-4">
             <div className="h-24 w-24 rounded-full border-4 border-neutral-950 bg-neutral-800" />
             <div className="flex-1 pb-2">
               <div className="mb-2 h-6 w-48 animate-pulse rounded bg-neutral-800" />

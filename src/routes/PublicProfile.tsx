@@ -49,6 +49,36 @@ function toWebUrl(s?: string | null) { if (!s) return null; const t=s.trim(); if
 function toInstagramUrl(s?: string | null) { if (!s) return null; const t=s.trim().replace(/^@/,""); if(!t) return null; if(/^https?:\/\//i.test(t)) return t; return `https://instagram.com/${encodeURIComponent(t)}`; }
 function toTwitterUrl(s?: string | null) { if (!s) return null; const t=s.trim().replace(/^@/,""); if(!t) return null; if(/^https?:\/\//i.test(t)) return t; return `https://twitter.com/${encodeURIComponent(t)}`; }
 
+// ----- creator presence detection
+function looksLikeMissingCreator(err: any) {
+  const msg = String(err?.message || err?.hint || err?.details || err);
+  return /column\s+"?creator"?\s+does not exist|creator["\)]?\s+does not exist/i.test(msg);
+}
+
+// mint activity helper
+async function getMintedByUserSet(artworkIds: string[], userId: string) {
+  if (!artworkIds.length) return new Set<string>();
+  const { data, error } = await supabase
+    .from("activity")
+    .select("artwork_id")
+    .eq("kind", "mint")
+    .eq("actor", userId)
+    .in("artwork_id", artworkIds);
+  if (error) return new Set<string>();
+  return new Set<string>((data || []).map((r: any) => r.artwork_id));
+}
+
+// server page of owned works
+async function fetchOwnedPage(userId: string, from: number, to: number) {
+  return await supabase
+    .from("artworks")
+    .select("id,title,cover_url,image_cid,created_at,owner,creator", { count: "exact" })
+    .eq("owner", userId)
+    .eq("status", "published")
+    .order("created_at", { ascending: false })
+    .range(from, to);
+}
+
 export default function PublicProfile() {
   const params = useParams();
   const username = ((params.username as string) || (params.handle as string) || "").replace(/^@/, "");
@@ -61,16 +91,17 @@ export default function PublicProfile() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [counts, setCounts] = useState<Counts>({ posts: 0, followers: 0, following: 0 });
-  const [badges, setBadges] = useState<{ kind: string; label: string }[]>([]);
+  const [badges, setBadges] = useState<Badge[]>([]);
 
   const [artworks, setArtworks] = useState<Artwork[]>([]);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [creatorAvailable, setCreatorAvailable] = useState<boolean | null>(null);
 
   const [showModal, setShowModal] = useState<null | "followers" | "following">(null);
 
-  // load profile
+  // Load profile
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -93,7 +124,7 @@ export default function PublicProfile() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [username]);
 
-  // counts + badges
+  // Counts + badges
   useEffect(() => {
     if (!profile) return;
     (async () => {
@@ -104,130 +135,111 @@ export default function PublicProfile() {
         .maybeSingle();
       setCounts({ posts: c?.posts ?? 0, followers: c?.followers ?? 0, following: c?.following ?? 0 });
 
-      const { data: b1 } = await supabase
+      const { data: b1, error: e1 } = await supabase
         .from("profile_badges_rows")
         .select("kind,label")
         .eq("user_id", profile.id);
-      if (Array.isArray(b1) && b1.length) {
-        setBadges((b1 as any[]).slice(0, 4) as any);
+
+      if (!e1 && Array.isArray(b1) && b1.length) {
+        setBadges((b1 as any[]).slice(0, 4) as Badge[]);
       } else {
         const { data: b2 } = await supabase
           .from("profile_badges")
           .select("verified,staff,top_seller")
           .eq("user_id", profile.id)
           .maybeSingle();
-        const list: any[] = [];
-        if (b2?.verified) list.push({ kind: "verified", label: "Verified" });
-        if (b2?.staff) list.push({ kind: "staff", label: "Staff" });
-        if (b2?.top_seller) list.push({ kind: "top_seller", label: "Top seller" });
+
+        const list: Badge[] = [];
+        if ((b2 as any)?.verified)   list.push({ kind: "verified",   label: "Verified" });
+        if ((b2 as any)?.staff)      list.push({ kind: "staff",      label: "Staff" });
+        if ((b2 as any)?.top_seller) list.push({ kind: "top_seller", label: "Top seller" });
         setBadges(list);
       }
     })();
   }, [profile]);
 
-  function looksLikeMissingCreator(err: any) {
-  const msg = String(err?.message || err?.hint || err?.details || err);
-  return /creator["\)]?\s+does not exist|column "creator" does not exist/i.test(msg);
-}
-
-  // Get a set of artwork IDs that were minted by this user
-async function getMintedByUserSet(artworkIds: string[], userId: string) {
-  if (!artworkIds.length) return new Set<string>();
-  const { data, error } = await supabase
-    .from("activity")
-    .select("artwork_id")
-    .eq("kind", "mint")
-    .eq("actor", userId)
-    .in("artwork_id", artworkIds);
-
-  if (error) {
-    // Non-fatal: just treat as none minted
-    return new Set<string>();
-  }
-  return new Set<string>((data || []).map((r: any) => r.artwork_id));
-}
-
-// Fetch a page of *owned* artworks (no creator dependency)
-async function fetchOwnedPage(userId: string, from: number, to: number) {
-  return await supabase
-    .from("artworks")
-    .select("id,title,cover_url,image_cid,created_at,owner", { count: "exact" })
-    .eq("owner", userId)
-    .eq("status", "published")
-    .order("created_at", { ascending: false })
-    .range(from, to);
-}
-
+  // Pager
   async function loadMore() {
-  if (!profile || loadingMore) return;
-  setLoadingMore(true);
+    if (!profile || loadingMore) return;
+    setLoadingMore(true);
 
-  // We page through *owned* rows on the server,
-  // but only append those matching the selected tab.
-  const wantUploaded = tab === "artworks";
-  const wantPurchased = tab === "purchased";
+    const wantUploaded = tab === "artworks";
+    const wantPurchased = tab === "purchased";
 
-  try {
-    let collected: Artwork[] = [];
-    let localFrom = page * PAGE_SIZE;
-    let localTo = localFrom + PAGE_SIZE - 1;
+    try {
+      let collected: Artwork[] = [];
+      let localFrom = page * PAGE_SIZE;
+      let localTo = localFrom + PAGE_SIZE - 1;
+      let serverHasMore = false;
 
-    // We may need multiple server pages to fill one UI page
-    // because we filter client-side into uploaded/purchased.
-    while (collected.length < PAGE_SIZE) {
-      const { data, count, error } = await fetchOwnedPage(profile.id, localFrom, localTo);
-      if (error) throw error;
+      while (collected.length < PAGE_SIZE) {
+        const { data, count, error } = await fetchOwnedPage(profile.id, localFrom, localTo);
+        if (error) throw error;
 
-      const rows = (data || []) as Artwork[];
-      if (rows.length === 0) {
-        // nothing more on the server
-        const total = typeof count === "number" ? count : 0;
-        setHasMore(localFrom < total);
-        break;
+        const rows = (data || []) as Artwork[];
+        const total = typeof count === "number" ? count : undefined;
+
+        if (rows.length === 0) {
+          serverHasMore = false;
+          break;
+        }
+
+        // Try with creator first
+        let filtered: Artwork[] | null = null;
+        if (creatorAvailable !== false) {
+          try {
+            if (wantUploaded) {
+              filtered = rows.filter(r => r.creator && r.creator === profile.id);
+            } else if (wantPurchased) {
+              filtered = rows.filter(r => r.owner === profile.id && r.creator !== profile.id);
+            }
+            if (creatorAvailable === null) setCreatorAvailable(true);
+          } catch (e: any) {
+            if (looksLikeMissingCreator(e)) {
+              setCreatorAvailable(false);
+              filtered = null;
+            } else {
+              throw e;
+            }
+          }
+        }
+
+        // Fallback to activity if needed
+        if (!filtered) {
+          const mintedByMe = await getMintedByUserSet(rows.map(r => r.id), profile.id);
+          filtered = rows.filter(r => {
+            const isUploaded = mintedByMe.has(r.id);
+            if (wantUploaded) return isUploaded;
+            if (wantPurchased) return !isUploaded;
+            return false;
+          });
+        }
+
+        collected = collected.concat(filtered);
+
+        // Advance server window
+        localFrom = localTo + 1;
+        localTo = localFrom + PAGE_SIZE - 1;
+
+        serverHasMore = typeof total === "number" ? localFrom < total : rows.length === PAGE_SIZE;
+        if (!serverHasMore) break;
+        if (collected.length >= PAGE_SIZE) break;
       }
 
-      // Decide which belong to uploaded vs purchased
-      const ids = rows.map(r => r.id);
-      const mintedByMe = await getMintedByUserSet(ids, profile.id);
-
-      const filtered = rows.filter(r => {
-        const isUploaded = mintedByMe.has(r.id);
-        if (wantUploaded)  return isUploaded;
-        if (wantPurchased) return !isUploaded;
-        return false;
-      });
-
-      collected = collected.concat(filtered);
-
-      // if server still has more, advance the server window
-      localFrom = localTo + 1;
-      localTo = localFrom + PAGE_SIZE - 1;
-
-      // If we already know total < next from, we can stop
-      const total = typeof count === "number" ? count : undefined;
-      if (typeof total === "number" && localFrom >= total) break;
+      setArtworks(prev => [...prev, ...collected]);
+      setPage(p => p + 1);
+      setHasMore(collected.length >= PAGE_SIZE || serverHasMore);
+    } catch (e: any) {
+      const msg = e?.message || e?.details || e?.hint || "Unknown error";
+      if (page === 0) {
+        toast({ variant: "error", title: "Couldn’t load artworks", description: msg });
+      }
+    } finally {
+      setLoadingMore(false);
     }
-
-    // Append what we collected this round (could be < PAGE_SIZE at the end)
-    setArtworks(prev => [...prev, ...collected]);
-    setPage(p => p + 1);
-
-    // Has more if last server window still had data and we didn't exhaust count
-    // A conservative check: if we collected fewer than PAGE_SIZE, we may still
-    // have more on a later click only if the server had more rows last call.
-    setHasMore(collected.length === PAGE_SIZE);
-  } catch (e: any) {
-    const msg = e?.message || e?.details || e?.hint || "Unknown error";
-    if (page === 0) {
-      toast({ variant: "error", title: "Couldn’t load artworks", description: msg });
-    }
-  } finally {
-    setLoadingMore(false);
   }
-}
 
-
-
+  // Reset list when profile or tab changes
   useEffect(() => {
     setArtworks([]); setPage(0); setHasMore(true);
     if (profile && (tab === "artworks" || tab === "purchased")) loadMore();
@@ -244,6 +256,7 @@ async function fetchOwnedPage(userId: string, from: number, to: number) {
   const twUrl = useMemo(() => toTwitterUrl(profile?.twitter), [profile?.twitter]);
   const hasSocial = !!(webUrl || igUrl || twUrl);
 
+  // SEO
   useEffect(() => {
     if (!profile) return;
     const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -297,7 +310,10 @@ async function fetchOwnedPage(userId: string, from: number, to: number) {
       <div className="p-8">
         <div className="mb-2 text-neutral-400">Profile “@{username}” not found.</div>
         {user && (
-          <Link to="/settings" className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900">
+          <Link
+            to="/settings"
+            className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900"
+          >
             Go to settings to set your username
           </Link>
         )}
@@ -329,6 +345,7 @@ async function fetchOwnedPage(userId: string, from: number, to: number) {
             <h1 className="text-2xl font-semibold">{displayName}</h1>
             {profile.username && <div className="text-sm text-neutral-400">@{profile.username}</div>}
 
+            {/* badges */}
             {badges.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
                 {badges.map((b) => (
@@ -341,6 +358,7 @@ async function fetchOwnedPage(userId: string, from: number, to: number) {
 
             {profile.bio && <p className="mt-2 max-w-3xl text-neutral-300">{profile.bio}</p>}
 
+            {/* Social links */}
             {hasSocial && (
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 {webUrl && (
@@ -483,8 +501,14 @@ async function fetchOwnedPage(userId: string, from: number, to: number) {
           )}
 
           {tab === "likes" && <LikesGrid profileId={profile.id} />}
-          {tab === "collections" && <CollectionsGrid ownerId={profile.id} isOwner={false} />}
-          {tab === "activity" && <div className="text-neutral-400">Activity feed coming soon.</div>}
+
+          {tab === "collections" && (
+            <CollectionsGrid ownerId={profile.id} isOwner={false} />
+          )}
+
+          {tab === "activity" && (
+            <div className="text-neutral-400">Activity feed coming soon.</div>
+          )}
         </div>
 
         <SuggestionsRail ownerId={profile.id} />
