@@ -26,6 +26,8 @@ type Artwork = {
   cover_url: string | null;
   image_cid: string | null;
   created_at: string;
+  creator?: string | null;
+  owner?: string | null;
 };
 
 type Counts = { posts: number; followers: number; following: number };
@@ -33,7 +35,7 @@ type Counts = { posts: number; followers: number; following: number };
 const PAGE_SIZE = 12;
 const ipfs = (cid?: string | null) => (cid ? `https://ipfs.io/ipfs/${cid}` : "");
 
-// URL helpers (same rules as PublicProfile)
+// URL helpers
 function toWebUrl(s?: string | null) {
   if (!s) return null;
   const t = s.trim();
@@ -55,6 +57,7 @@ function toTwitterUrl(s?: string | null) {
   if (/^https?:\/\//i.test(t)) return t;
   return `https://twitter.com/${encodeURIComponent(t)}`;
 }
+
 // Inline icons
 const GlobeIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
@@ -81,9 +84,7 @@ export default function MyProfile() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useSearchParams();
-  const rawTab = (search.get("tab") || "owned") as "owned" | "artworks" | "likes" | "collections" | "activity";
-  // Back-compat: treat ?tab=artworks as "owned"
-  const tab = (rawTab === "artworks" ? "owned" : rawTab) as "owned" | "likes" | "collections" | "activity";
+  const tab = (search.get("tab") || "artworks") as "artworks" | "purchased" | "likes" | "collections" | "activity";
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
@@ -130,18 +131,35 @@ export default function MyProfile() {
   async function loadMore() {
     if (!profile || loadingMore) return;
     setLoadingMore(true);
+
     const from = page * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
 
-    const { data, count } = await supabase
+    // tab-aware query
+    let query = supabase
       .from("artworks")
-      .select("id,title,cover_url,image_cid,created_at", { count: "exact" })
-      .eq("owner", profile.id)
-      .eq("status", "published")
+      .select("id,title,cover_url,image_cid,created_at,creator,owner", { count: "exact" })
+      .eq("status", "published");
+
+    if (tab === "artworks") {
+      query = query.eq("creator", profile.id);
+    } else if (tab === "purchased") {
+      // everything owned that wasn't created by the user
+      query = query.eq("owner", profile.id).neq("creator", profile.id);
+    } else {
+      setLoadingMore(false);
+      return;
+    }
+
+    const { data, count, error } = await query
       .order("created_at", { ascending: false })
       .range(from, to);
 
     setLoadingMore(false);
+    if (error) {
+      toast({ variant: "error", title: "Couldn’t load artworks", description: error.message });
+      return;
+    }
     const rows = (data || []) as Artwork[];
     setArtworks((prev) => [...prev, ...rows]);
     setPage((p) => p + 1);
@@ -149,18 +167,19 @@ export default function MyProfile() {
     setHasMore(from + rows.length < total);
   }
 
+  // reset grid when tab/profile changes
   useEffect(() => {
     setArtworks([]); setPage(0); setHasMore(true);
-    if (profile) loadMore();
+    if (profile && (tab === "artworks" || tab === "purchased")) loadMore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile?.id]);
+  }, [profile?.id, tab]);
 
   const displayName = useMemo(
     () => profile?.display_name || (profile?.username ? `@${profile.username}` : "You"),
     [profile]
   );
 
-  const setTab = (t: typeof tab) =>
+  const setTabParam = (t: typeof tab) =>
     setSearch((s) => { const n = new URLSearchParams(s); n.set("tab", t); return n; }, { replace: true });
 
   const webUrl = toWebUrl(profile?.website);
@@ -168,7 +187,6 @@ export default function MyProfile() {
   const twUrl  = toTwitterUrl(profile?.twitter);
   const hasSocial = !!(webUrl || igUrl || twUrl);
 
-  // Share handler
   async function handleShare() {
     if (!profile) return;
     const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -181,9 +199,7 @@ export default function MyProfile() {
         await navigator.clipboard.writeText(url);
         toast({ title: "Link copied", description: "Profile URL copied to clipboard." });
       }
-    } catch {
-      // ignore user-cancel
-    }
+    } catch {}
   }
 
   if (!user) {
@@ -248,7 +264,6 @@ export default function MyProfile() {
             {profile.username && <div className="text-sm text-neutral-400">@{profile.username}</div>}
             {profile.bio && <p className="mt-2 max-w-2xl text-neutral-300">{profile.bio}</p>}
 
-            {/* Social links */}
             {hasSocial && (
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 {webUrl && (
@@ -303,10 +318,10 @@ export default function MyProfile() {
           </div>
 
           <div className="flex gap-2">
-            {(["owned","likes","collections","activity"] as const).map((t) => (
+            {(["artworks","purchased","likes","collections","activity"] as const).map((t) => (
               <button
                 key={t}
-                onClick={() => setTab(t)}
+                onClick={() => setTabParam(t)}
                 className={`rounded-full border px-3 py-1.5 text-sm capitalize ${
                   tab === t ? "border-neutral-500" : "border-neutral-700 hover:bg-neutral-900"
                 }`}
@@ -331,7 +346,7 @@ export default function MyProfile() {
 
       {/* Main */}
       <div className="mx-auto max-w-6xl px-4 py-8">
-        {tab === "owned" && (
+        {(tab === "artworks" || tab === "purchased") && (
           <>
             <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
               {artworks.map((a) => {
@@ -367,6 +382,12 @@ export default function MyProfile() {
                 >
                   {loadingMore ? "Loading…" : "Load more"}
                 </button>
+              </div>
+            )}
+
+            {!loadingMore && artworks.length === 0 && (
+              <div className="text-sm text-neutral-400">
+                {tab === "artworks" ? "No artworks uploaded yet." : "No purchases yet."}
               </div>
             )}
           </>
