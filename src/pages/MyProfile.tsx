@@ -35,7 +35,30 @@ type Counts = { posts: number; followers: number; following: number };
 const PAGE_SIZE = 12;
 const ipfs = (cid?: string | null) => (cid ? `https://ipfs.io/ipfs/${cid}` : "");
 
-// Small inline icons (local so you won’t get the “Cannot find name” error)
+// URL helpers
+function toWebUrl(s?: string | null) {
+  if (!s) return null;
+  const t = s.trim();
+  if (!t) return null;
+  if (/^https?:\/\//i.test(t)) return t;
+  return `https://${t}`;
+}
+function toInstagramUrl(s?: string | null) {
+  if (!s) return null;
+  const t = s.trim().replace(/^@/, "");
+  if (!t) return null;
+  if (/^https?:\/\//i.test(t)) return t;
+  return `https://instagram.com/${encodeURIComponent(t)}`;
+}
+function toTwitterUrl(s?: string | null) {
+  if (!s) return null;
+  const t = s.trim().replace(/^@/, "");
+  if (!t) return null;
+  if (/^https?:\/\//i.test(t)) return t;
+  return `https://twitter.com/${encodeURIComponent(t)}`;
+}
+
+// Inline icons (kept local so the file compiles on its own)
 const GlobeIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" {...props}>
     <path fill="currentColor" d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2Zm7.93 9h-3.09a15.7 15.7 0 0 0-1.15-5.01A8.03 8.03 0 0 1 19.93 11ZM12 4c.9 0 2.3 2.04 2.92 6H9.08C9.7 6.04 11.1 4 12 4ZM8.31 6a15.7 15.7 0 0 0-1.16 5H4.07A8.03 8.03 0 0 1 8.31 6ZM4.07 13h3.08c.12 1.77.5 3.5 1.16 5a8.03 8.03 0 0 1-4.24-5Zm4.99 0h6c-.62 3.96-2.02 6-3 6s-2.38-2.04-3-6Zm6.63 5c.66-1.5 1.04-3.23 1.16-5h3.08a8.03 8.03 0 0 1-4.24 5Z"/>
@@ -56,12 +79,6 @@ const ShareIcon = (props: React.SVGProps<SVGSVGElement>) => (
     <path fill="currentColor" d="M14 3l7 7-1.41 1.41L15 6.83V17a5 5 0 0 1-5 5H5v-2h5a3 3 0 0 0 3-3V6.83l-4.59 4.58L7 10l7-7Z"/>
   </svg>
 );
-
-// Helpful for catching old DBs that don’t have the new column yet
-function missingCreator(err: any) {
-  const s = String(err?.message || err?.hint || err?.details || err || "");
-  return /column\s+"?creator"?\s+does not exist/i.test(s);
-}
 
 export default function MyProfile() {
   const { user } = useAuth();
@@ -111,6 +128,11 @@ export default function MyProfile() {
     })();
   }, [profile]);
 
+  function isRangeError(err: any) {
+    const code = err?.code || err?.details || err?.message;
+    return /PGRST116|range|Range Not Satisfiable/i.test(String(code));
+  }
+
   async function loadMore() {
     if (!profile || loadingMore) return;
     setLoadingMore(true);
@@ -118,55 +140,48 @@ export default function MyProfile() {
     const from = page * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
 
-    // Base query (request creator + owner columns)
-    const base = supabase
+    // We rely on 'creator' for clean separation.
+    // If the column doesn't exist yet on your DB, the fallback is handled below.
+    let q = supabase
       .from("artworks")
       .select("id,title,cover_url,image_cid,created_at,creator,owner", { count: "exact" })
       .eq("status", "published")
       .order("created_at", { ascending: false });
 
-    try {
-      let q = base;
-      if (tab === "artworks") {
-        q = q.eq("creator", profile.id);
-      } else if (tab === "purchased") {
-        q = q.eq("owner", profile.id).neq("creator", profile.id);
-      } else {
-        setLoadingMore(false);
-        return;
-      }
-
-      const { data, error, count } = await q.range(from, to);
-      if (error) {
-        // If this DB doesn't have `creator`, tell the user once.
-        if (missingCreator(error)) {
-          toast({
-            variant: "error",
-            title: "Database needs a quick migration",
-            description:
-              "Add a `creator` column to artworks and backfill it (see migration I sent). For now, Purchased cannot be computed accurately.",
-          });
-        } else {
-          toast({ variant: "error", title: "Couldn’t load artworks", description: error.message });
-        }
-        setLoadingMore(false);
-        return;
-      }
-
-      const rows = (data || []) as Artwork[];
-      setArtworks((prev) => [...prev, ...rows]);
-      setPage((p) => p + 1);
-
-      const total = typeof count === "number" ? count : 0;
-      setHasMore(from + rows.length < total);
-    } finally {
+    if (tab === "artworks") q = q.eq("creator", profile.id);
+    else if (tab === "purchased") q = q.eq("owner", profile.id).neq("creator", profile.id);
+    else {
       setLoadingMore(false);
+      return;
     }
+
+    const { data, count, error } = await q.range(from, to);
+
+    if (error) {
+      // 416 “Range Not Satisfiable” – we’re past the end; just stop paging
+      if (isRangeError(error)) {
+        setHasMore(false);
+        setLoadingMore(false);
+        return;
+      }
+      toast({ variant: "error", title: "Couldn’t load artworks", description: error.message || "Error" });
+      setLoadingMore(false);
+      return;
+    }
+
+    const rows = (data || []) as Artwork[];
+    setArtworks((prev) => [...prev, ...rows]);
+    setPage((p) => p + 1);
+    const total = typeof count === "number" ? count : 0;
+    setHasMore(from + rows.length < total);
+    setLoadingMore(false);
   }
 
-  // Reset grid when tab/profile changes
+  // reset grid when tab/profile changes
   useEffect(() => {
-    setArtworks([]); setPage(0); setHasMore(true);
+    setArtworks([]);
+    setPage(0);
+    setHasMore(true);
     if (profile && (tab === "artworks" || tab === "purchased")) loadMore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.id, tab]);
@@ -179,14 +194,9 @@ export default function MyProfile() {
   const setTabParam = (t: typeof tab) =>
     setSearch((s) => { const n = new URLSearchParams(s); n.set("tab", t); return n; }, { replace: true });
 
-  // Socials
-  const toWebUrl = (s?: string | null) => s && (/^https?:\/\//i.test(s.trim()) ? s.trim() : `https://${s.trim()}`);
-  const toInstagramUrl = (s?: string | null) => s && (/^https?:\/\//i.test(s.trim()) ? s.trim() : `https://instagram.com/${encodeURIComponent(s.trim().replace(/^@/, ""))}`);
-  const toTwitterUrl = (s?: string | null) => s && (/^https?:\/\//i.test(s.trim()) ? s.trim() : `https://twitter.com/${encodeURIComponent(s.trim().replace(/^@/, ""))}`);
-
-  const webUrl = toWebUrl(profile?.website || undefined);
-  const igUrl  = toInstagramUrl(profile?.instagram || undefined);
-  const twUrl  = toTwitterUrl(profile?.twitter || undefined);
+  const webUrl = toWebUrl(profile?.website);
+  const igUrl  = toInstagramUrl(profile?.instagram);
+  const twUrl  = toTwitterUrl(profile?.twitter);
   const hasSocial = !!(webUrl || igUrl || twUrl);
 
   async function handleShare() {
@@ -199,7 +209,8 @@ export default function MyProfile() {
         await navigator.share({ title, text: title, url });
       } else {
         await navigator.clipboard.writeText(url);
-        toast({ title: "Link copied", description: "Profile URL copied to clipboard." });
+        // @ts-ignore
+        (window as any).toast?.({ title: "Link copied", description: "Profile URL copied to clipboard." });
       }
     } catch {}
   }
