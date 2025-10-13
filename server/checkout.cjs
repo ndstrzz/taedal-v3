@@ -212,4 +212,22 @@ async function webhook(req, res) {
   }
 }
 
+// Lookup a Stripe Checkout Session by id
+router.get("/session", async (req, res) => {
+  try {
+    if (!stripe) return res.status(501).json({ error: "Stripe not configured" });
+    const sid =
+      String(req.query.session_id || req.query.sid || "").trim();
+    if (!sid) return res.status(400).json({ error: "Missing session_id" });
+
+    const session = await stripe.checkout.sessions.retrieve(sid, {
+      expand: ["payment_intent", "customer"],
+    });
+    return res.json({ ok: true, session });
+  } catch (e) {
+    console.error("[stripe] session retrieve error:", e);
+    return res.status(404).json({ error: "Session not found" });
+  }
+});
+
 module.exports = { router, webhook };
