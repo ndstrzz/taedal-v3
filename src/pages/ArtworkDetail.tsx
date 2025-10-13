@@ -2,10 +2,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { ipfsToHttp } from "../lib/ipfs-url";
+import { ipfsToHttp, ipfsCandidates } from "../lib/ipfs-url";
 import { DEFAULT_COVER_URL } from "../lib/config";
 import { apiFetch } from "../lib/api";
-import { useAuth } from "../state/AuthContext";             // <-- NEW
+import { useAuth } from "../state/AuthContext";
 import MakeOfferModal from "../components/MakeOfferModal";
 import CheckoutModal from "../components/CheckoutModal";
 
@@ -61,7 +61,7 @@ function formatPrice(val: string | number, currency: "ETH" | "WETH" | "USD"): st
 
 export default function ArtworkDetail() {
   const { id } = useParams<{ id: string }>();
-  const { user } = useAuth();                                    // <-- NEW
+  const { user } = useAuth();
 
   const [art, setArt] = useState<Artwork | null>(null);
   const [meta, setMeta] = useState<Metadata | null>(null);
@@ -151,29 +151,34 @@ export default function ArtworkDetail() {
 
   async function refetchAll() { if (!id) return; await Promise.all([fetchListing(id), fetchActivity(id)]); }
 
-  const media = useMemo(() => {
-    const poster = art?.cover_url || DEFAULT_COVER_URL;
-    if (art?.media_kind === "video") {
-      if (art?.animation_cid) return { kind: "video" as const, poster, src: ipfsToHttp(`ipfs://${art.animation_cid}`) };
-      if (meta?.animation_url) return { kind: "video" as const, poster, src: ipfsToHttp(meta.animation_url) };
-      return { kind: "video" as const, poster, src: "" };
-    }
-    if (art?.image_cid) return { kind: "image" as const, poster, src: ipfsToHttp(`ipfs://${art.image_cid}`) };
-    if (meta?.image)    return { kind: "image" as const, poster, src: ipfsToHttp(meta.image) };
-    return { kind: "image" as const, poster, src: poster };
-  }, [art?.media_kind, art?.animation_cid, art?.image_cid, art?.cover_url, meta?.animation_url, meta?.image]);
+  // Build media source candidates (multiple gateways) + poster fallback
+  const poster = art?.cover_url || DEFAULT_COVER_URL;
+  const imageCandidates = useMemo(() => {
+    if (art?.media_kind === "video") return [] as string[];
+    if (art?.image_cid) return ipfsCandidates(`ipfs://${art.image_cid}`);
+    if (meta?.image)    return ipfsCandidates(meta.image);
+    return poster ? [poster] : [];
+  }, [art?.media_kind, art?.image_cid, meta?.image, poster]);
 
-  const rarityMap = useMemo(() => {
-    const m = new Map<string, TraitStat>();
-    for (const s of traitStats) m.set(`${s.trait_type}::${s.value}`, s);
-    return m;
-  }, [traitStats]);
+  const videoCandidates = useMemo(() => {
+    if (art?.media_kind !== "video") return [] as string[];
+    if (art?.animation_cid) return ipfsCandidates(`ipfs://${art.animation_cid}`);
+    if (meta?.animation_url) return ipfsCandidates(meta.animation_url);
+    return [];
+  }, [art?.media_kind, art?.animation_cid, meta?.animation_url]);
+
+  // index states to rotate through gateways on errors
+  const [imgIdx, setImgIdx] = useState(0);
+  const [vidIdx, setVidIdx] = useState(0);
+
+  useEffect(() => setImgIdx(0), [imageCandidates.join("|")]);
+  useEffect(() => setVidIdx(0), [videoCandidates.join("|")]);
 
   if (loading) return <Skeleton />;
   if (err) return <div className="p-6 text-red-400">Error: {err}</div>;
   if (!art) return <div className="p-6 text-neutral-400">Artwork not found.</div>;
 
-  const isOwner = Boolean(user?.id && art.owner && user.id === art.owner); // <-- NEW
+  const isOwner = Boolean(user?.id && art.owner && user.id === art.owner);
 
   const title = art.title || meta?.name || "Untitled";
   const desc = art.description || meta?.description || "";
@@ -185,7 +190,7 @@ export default function ArtworkDetail() {
   const currentCurrency = (listing?.currency || art.sale_currency || "ETH") as "ETH" | "WETH" | "USD";
   const displayPrice = currentPrice ? formatPrice(currentPrice, currentCurrency) : null;
 
-  const canBuy = !isOwner && Boolean(listingId && currentPrice); // <-- only non-owners with active listing can buy
+  const canBuy = !isOwner && Boolean(listingId && currentPrice);
 
   async function ownerListForSaleUSD() {
     try {
@@ -213,16 +218,36 @@ export default function ArtworkDetail() {
       <div className="grid gap-6 md:grid-cols-2">
         {/* Media */}
         <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950">
-          {media.kind === "video" ? (
-            <video src={media.src} poster={media.poster || undefined} className="h-full w-full" controls playsInline />
+          {art.media_kind === "video" ? (
+            videoCandidates.length ? (
+              <video
+                key={videoCandidates[vidIdx]}
+                src={videoCandidates[vidIdx]}
+                poster={poster || undefined}
+                className="h-full w-full"
+                controls
+                playsInline
+                onError={() => {
+                  const next = vidIdx + 1;
+                  if (next < videoCandidates.length) setVidIdx(next);
+                }}
+              />
+            ) : (
+              <img src={poster} alt={title} className="h-full w-full object-contain" />
+            )
           ) : (
             <img
-              src={media.src || media.poster}
+              key={imageCandidates[imgIdx] || poster}
+              src={imageCandidates[imgIdx] || poster}
               alt={title}
               className="h-full w-full object-contain"
-              onError={(e) => {
-                const el = e.currentTarget;
-                if (el.src !== media.poster) el.src = media.poster;
+              onError={() => {
+                const next = imgIdx + 1;
+                if (next < imageCandidates.length) setImgIdx(next);
+                else if (imageCandidates[imgIdx] !== poster) {
+                  // Final fallback to poster
+                  (e => ((e.target as HTMLImageElement).src = poster)) as any;
+                }
               }}
             />
           )}
@@ -345,7 +370,7 @@ export default function ArtworkDetail() {
           <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
             {attributes.map((t, i) => {
               const key = `${t.trait_type}::${String(t.value)}`;
-              const s = rarityMap.get(key);
+              const s = traitStats.find((x) => x.trait_type === t.trait_type && x.value === String(t.value));
               const pct = s ? Math.round((s.freq || 0) * 1000) / 10 : null;
               return (
                 <li key={i} className="rounded-xl border border-neutral-800 p-3">
@@ -385,7 +410,7 @@ export default function ArtworkDetail() {
           title={title}
           price={String(currentPrice)}
           currency={currentCurrency}
-          imageUrl={media.kind === "image" ? (media.src || media.poster) : media.poster}
+          imageUrl={(imageCandidates[imgIdx] || poster)}
         />
       )}
       {showOffer && (
