@@ -130,41 +130,92 @@ export default function PublicProfile() {
   return /creator["\)]?\s+does not exist|column "creator" does not exist/i.test(msg);
 }
 
+  // Get a set of artwork IDs that were minted by this user
+async function getMintedByUserSet(artworkIds: string[], userId: string) {
+  if (!artworkIds.length) return new Set<string>();
+  const { data, error } = await supabase
+    .from("activity")
+    .select("artwork_id")
+    .eq("kind", "mint")
+    .eq("actor", userId)
+    .in("artwork_id", artworkIds);
+
+  if (error) {
+    // Non-fatal: just treat as none minted
+    return new Set<string>();
+  }
+  return new Set<string>((data || []).map((r: any) => r.artwork_id));
+}
+
+// Fetch a page of *owned* artworks (no creator dependency)
+async function fetchOwnedPage(userId: string, from: number, to: number) {
+  return await supabase
+    .from("artworks")
+    .select("id,title,cover_url,image_cid,created_at,owner", { count: "exact" })
+    .eq("owner", userId)
+    .eq("status", "published")
+    .order("created_at", { ascending: false })
+    .range(from, to);
+}
+
   async function loadMore() {
   if (!profile || loadingMore) return;
   setLoadingMore(true);
 
-  const from = page * PAGE_SIZE;
-  const to = from + PAGE_SIZE - 1;
-
-  const base = supabase
-    .from("artworks")
-    .select("id,title,cover_url,image_cid,created_at,creator,owner", { count: "exact" })
-    .eq("status", "published")
-    .order("created_at", { ascending: false });
+  // We page through *owned* rows on the server,
+  // but only append those matching the selected tab.
+  const wantUploaded = tab === "artworks";
+  const wantPurchased = tab === "purchased";
 
   try {
-    let q = base;
-    if (tab === "artworks") q = q.eq("creator", profile.id);
-    else if (tab === "purchased") q = q.eq("owner", profile.id).neq("creator", profile.id);
-    else { setLoadingMore(false); return; }
+    let collected: Artwork[] = [];
+    let localFrom = page * PAGE_SIZE;
+    let localTo = localFrom + PAGE_SIZE - 1;
 
-    let { data, count, error } = await q.range(from, to);
+    // We may need multiple server pages to fill one UI page
+    // because we filter client-side into uploaded/purchased.
+    while (collected.length < PAGE_SIZE) {
+      const { data, count, error } = await fetchOwnedPage(profile.id, localFrom, localTo);
+      if (error) throw error;
 
-    if (error && looksLikeMissingCreator(error) && tab === "purchased") {
-      const fallback = await base.eq("owner", profile.id).range(from, to);
-      data = fallback.data;
-      count = fallback.count;
-      error = fallback.error;
+      const rows = (data || []) as Artwork[];
+      if (rows.length === 0) {
+        // nothing more on the server
+        const total = typeof count === "number" ? count : 0;
+        setHasMore(localFrom < total);
+        break;
+      }
+
+      // Decide which belong to uploaded vs purchased
+      const ids = rows.map(r => r.id);
+      const mintedByMe = await getMintedByUserSet(ids, profile.id);
+
+      const filtered = rows.filter(r => {
+        const isUploaded = mintedByMe.has(r.id);
+        if (wantUploaded)  return isUploaded;
+        if (wantPurchased) return !isUploaded;
+        return false;
+      });
+
+      collected = collected.concat(filtered);
+
+      // if server still has more, advance the server window
+      localFrom = localTo + 1;
+      localTo = localFrom + PAGE_SIZE - 1;
+
+      // If we already know total < next from, we can stop
+      const total = typeof count === "number" ? count : undefined;
+      if (typeof total === "number" && localFrom >= total) break;
     }
 
-    if (error) throw error;
-
-    const rows = (data || []) as Artwork[];
-    setArtworks(prev => [...prev, ...rows]);
+    // Append what we collected this round (could be < PAGE_SIZE at the end)
+    setArtworks(prev => [...prev, ...collected]);
     setPage(p => p + 1);
-    const total = typeof count === "number" ? count : 0;
-    setHasMore(from + rows.length < total);
+
+    // Has more if last server window still had data and we didn't exhaust count
+    // A conservative check: if we collected fewer than PAGE_SIZE, we may still
+    // have more on a later click only if the server had more rows last call.
+    setHasMore(collected.length === PAGE_SIZE);
   } catch (e: any) {
     const msg = e?.message || e?.details || e?.hint || "Unknown error";
     if (page === 0) {
@@ -174,6 +225,7 @@ export default function PublicProfile() {
     setLoadingMore(false);
   }
 }
+
 
 
   useEffect(() => {

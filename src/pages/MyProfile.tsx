@@ -35,6 +35,32 @@ type Counts = { posts: number; followers: number; following: number };
 const PAGE_SIZE = 12;
 const ipfs = (cid?: string | null) => (cid ? `https://ipfs.io/ipfs/${cid}` : "");
 
+async function getMintedByUserSet(artworkIds: string[], userId: string) {
+  if (!artworkIds.length) return new Set<string>();
+  const { data, error } = await supabase
+    .from("activity")
+    .select("artwork_id")
+    .eq("kind", "mint")
+    .eq("actor", userId)
+    .in("artwork_id", artworkIds);
+
+  if (error) {
+    return new Set<string>();
+  }
+  return new Set<string>((data || []).map((r: any) => r.artwork_id));
+}
+
+async function fetchOwnedPage(userId: string, from: number, to: number) {
+  return await supabase
+    .from("artworks")
+    .select("id,title,cover_url,image_cid,created_at,owner", { count: "exact" })
+    .eq("owner", userId)
+    .eq("status", "published")
+    .order("created_at", { ascending: false })
+    .range(from, to);
+}
+
+
 function looksLikeMissingCreator(err: any) {
   const msg = String(err?.message || err?.hint || err?.details || err);
   return /creator["\)]?\s+does not exist|column "creator" does not exist/i.test(msg);
@@ -137,50 +163,56 @@ export default function MyProfile() {
   if (!profile || loadingMore) return;
   setLoadingMore(true);
 
-  const from = page * PAGE_SIZE;
-  const to = from + PAGE_SIZE - 1;
-
-  // base select
-  const base = supabase
-    .from("artworks")
-    .select("id,title,cover_url,image_cid,created_at,creator,owner", { count: "exact" })
-    .eq("status", "published")
-    .order("created_at", { ascending: false });
+  const wantUploaded  = tab === "artworks";
+  const wantPurchased = tab === "purchased";
 
   try {
-    let q = base;
-    if (tab === "artworks") q = q.eq("creator", profile.id);
-    else if (tab === "purchased") q = q.eq("owner", profile.id).neq("creator", profile.id);
-    else { setLoadingMore(false); return; }
+    let collected: Artwork[] = [];
+    let localFrom = page * PAGE_SIZE;
+    let localTo   = localFrom + PAGE_SIZE - 1;
 
-    let { data, count, error } = await q.range(from, to);
+    while (collected.length < PAGE_SIZE) {
+      const { data, count, error } = await fetchOwnedPage(profile.id, localFrom, localTo);
+      if (error) throw error;
 
-    // If creator column doesn’t exist in this DB, fall back to owner-only
-    if (error && looksLikeMissingCreator(error) && tab === "purchased") {
-      const fallback = await base.eq("owner", profile.id).range(from, to);
-      data = fallback.data;
-      count = fallback.count;
-      error = fallback.error;
+      const rows = (data || []) as Artwork[];
+      if (rows.length === 0) {
+        const total = typeof count === "number" ? count : 0;
+        setHasMore(localFrom < total);
+        break;
+      }
+
+      const ids = rows.map(r => r.id);
+      const mintedByMe = await getMintedByUserSet(ids, profile.id);
+
+      const filtered = rows.filter(r => {
+        const isUploaded = mintedByMe.has(r.id);
+        if (wantUploaded)  return isUploaded;
+        if (wantPurchased) return !isUploaded;
+        return false;
+      });
+
+      collected = collected.concat(filtered);
+
+      // advance the server window
+      localFrom = localTo + 1;
+      localTo   = localFrom + PAGE_SIZE - 1;
+
+      const total = typeof count === "number" ? count : undefined;
+      if (typeof total === "number" && localFrom >= total) break;
     }
 
-    if (error) throw error;
-
-    const rows = (data || []) as Artwork[];
-    setArtworks(prev => [...prev, ...rows]);
+    setArtworks(prev => [...prev, ...collected]);
     setPage(p => p + 1);
-    const total = typeof count === "number" ? count : 0;
-    setHasMore(from + rows.length < total);
+    setHasMore(collected.length === PAGE_SIZE);
   } catch (e: any) {
     const msg = e?.message || e?.details || e?.hint || "Unknown error";
-    // surface once per page bump
-    if (page === 0) {
-      // make sure the toast shows a readable message
-      toast({ variant: "error", title: "Couldn’t load artworks", description: msg });
-    }
+    if (page === 0) toast({ variant: "error", title: "Couldn’t load artworks", description: msg });
   } finally {
     setLoadingMore(false);
   }
 }
+
 
 
   // reset grid when tab/profile changes
