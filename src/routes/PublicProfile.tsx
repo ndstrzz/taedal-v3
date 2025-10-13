@@ -125,39 +125,56 @@ export default function PublicProfile() {
     })();
   }, [profile]);
 
+  function looksLikeMissingCreator(err: any) {
+  const msg = String(err?.message || err?.hint || err?.details || err);
+  return /creator["\)]?\s+does not exist|column "creator" does not exist/i.test(msg);
+}
+
   async function loadMore() {
-    if (!profile || loadingMore) return;
-    setLoadingMore(true);
+  if (!profile || loadingMore) return;
+  setLoadingMore(true);
 
-    const from = page * PAGE_SIZE;
-    const to = from + PAGE_SIZE - 1;
+  const from = page * PAGE_SIZE;
+  const to = from + PAGE_SIZE - 1;
 
-    let query = supabase
-      .from("artworks")
-      .select("id,title,cover_url,image_cid,created_at,creator,owner", { count: "exact" })
-      .eq("status", "published");
+  const base = supabase
+    .from("artworks")
+    .select("id,title,cover_url,image_cid,created_at,creator,owner", { count: "exact" })
+    .eq("status", "published")
+    .order("created_at", { ascending: false });
 
-    if (tab === "artworks") {
-      query = query.eq("creator", profile.id);
-    } else if (tab === "purchased") {
-      query = query.eq("owner", profile.id).neq("creator", profile.id);
-    } else {
-      setLoadingMore(false);
-      return;
+  try {
+    let q = base;
+    if (tab === "artworks") q = q.eq("creator", profile.id);
+    else if (tab === "purchased") q = q.eq("owner", profile.id).neq("creator", profile.id);
+    else { setLoadingMore(false); return; }
+
+    let { data, count, error } = await q.range(from, to);
+
+    if (error && looksLikeMissingCreator(error) && tab === "purchased") {
+      const fallback = await base.eq("owner", profile.id).range(from, to);
+      data = fallback.data;
+      count = fallback.count;
+      error = fallback.error;
     }
 
-    const { data, count, error } = await query
-      .order("created_at", { ascending: false })
-      .range(from, to);
+    if (error) throw error;
 
-    setLoadingMore(false);
-    if (error) { toast({ variant: "error", title: "Couldn’t load artworks", description: error.message }); return; }
     const rows = (data || []) as Artwork[];
-    setArtworks((prev) => [...prev, ...rows]);
-    setPage((p) => p + 1);
+    setArtworks(prev => [...prev, ...rows]);
+    setPage(p => p + 1);
     const total = typeof count === "number" ? count : 0;
     setHasMore(from + rows.length < total);
+  } catch (e: any) {
+    const msg = e?.message || e?.details || e?.hint || "Unknown error";
+    if (page === 0) {
+      toast({ variant: "error", title: "Couldn’t load artworks", description: msg });
+    }
+  } finally {
+    setLoadingMore(false);
   }
+}
+
 
   useEffect(() => {
     setArtworks([]); setPage(0); setHasMore(true);
