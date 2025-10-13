@@ -1,4 +1,3 @@
-// src/pages/ArtworkDetail.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
@@ -151,13 +150,12 @@ export default function ArtworkDetail() {
 
   async function refetchAll() { if (!id) return; await Promise.all([fetchListing(id), fetchActivity(id)]); }
 
-  // Media candidates (multi-gateway) + poster
+  // Build media source candidates (multiple gateways) + poster fallback
   const poster = art?.cover_url || DEFAULT_COVER_URL;
-
   const imageCandidates = useMemo(() => {
     if (art?.media_kind === "video") return [] as string[];
     if (art?.image_cid) return ipfsCandidates(`ipfs://${art.image_cid}`);
-    if (meta?.image) return ipfsCandidates(meta.image);
+    if (meta?.image)    return ipfsCandidates(meta.image);
     return poster ? [poster] : [];
   }, [art?.media_kind, art?.image_cid, meta?.image, poster]);
 
@@ -168,6 +166,7 @@ export default function ArtworkDetail() {
     return [];
   }, [art?.media_kind, art?.animation_cid, meta?.animation_url]);
 
+  // index states to rotate through gateways on errors
   const [imgIdx, setImgIdx] = useState(0);
   const [vidIdx, setVidIdx] = useState(0);
 
@@ -199,7 +198,7 @@ export default function ArtworkDetail() {
         method: "POST",
         body: JSON.stringify({
           artwork_id: art.id,
-          price: 123,
+          price: 123,              // placeholder; replace with UI later
           currency: "USD",
         }),
       });
@@ -209,12 +208,56 @@ export default function ArtworkDetail() {
     }
   }
 
+  async function cancelListing() {
+    if (!listingId) return;
+    try {
+      await apiFetch("/api/listings/cancel", {
+        method: "POST",
+        body: JSON.stringify({ listing_id: listingId }),
+      });
+      await refetchAll();
+    } catch (e: any) {
+      alert(`Cancel failed: ${e?.message || e}`);
+    }
+  }
+
   async function handleBuyClick() {
     setShowCheckout(true);
   }
 
   return (
     <div className="mx-auto max-w-6xl p-6">
+      {/* OWNER BANNER */}
+      {isOwner && (
+        <div className="mb-4 rounded-2xl border border-emerald-700/50 bg-emerald-900/10 p-4 text-emerald-200">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="rounded-full border border-emerald-700/60 px-2 py-0.5 text-xs uppercase tracking-wide">
+              Owned
+            </span>
+            <span className="text-sm">You are the current owner of this artwork.</span>
+            <div className="ml-auto flex gap-2">
+              {listingId ? (
+                <>
+                  <button
+                    onClick={cancelListing}
+                    className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900"
+                  >
+                    Not for sale
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-900"
+                  onClick={ownerListForSaleUSD}
+                >
+                  List for sale
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid gap-6 md:grid-cols-2">
         {/* Media */}
         <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950">
@@ -244,8 +287,8 @@ export default function ArtworkDetail() {
               onError={(e) => {
                 const next = imgIdx + 1;
                 if (next < imageCandidates.length) setImgIdx(next);
-                else if ((e.currentTarget.src || "") !== poster) {
-                  e.currentTarget.src = poster;
+                else if ((e.target as HTMLImageElement).src !== poster) {
+                  (e.target as HTMLImageElement).src = poster;
                 }
               }}
             />
@@ -254,16 +297,21 @@ export default function ArtworkDetail() {
 
         {/* Right rail */}
         <div>
-          <div className="text-xl font-semibold text-neutral-100">{title}</div>
+          <div className="flex items-center gap-2">
+            <div className="text-xl font-semibold text-neutral-100">{title}</div>
+            {isOwner && (
+              <span className="rounded-full border border-emerald-700/60 px-2 py-0.5 text-[11px] text-emerald-300">
+                You own this
+              </span>
+            )}
+          </div>
           <div className="mt-1 text-sm text-neutral-400">
             Owned by{" "}
             {art.owner ? (
               <Link to={`/u/${art.owner}`} className="text-neutral-200 hover:underline">
                 {art.owner.slice(0, 6)}…{art.owner.slice(-4)}
               </Link>
-            ) : (
-              "unknown"
-            )}
+            ) : ("unknown")}
           </div>
 
           <div className="mt-4 rounded-2xl border border-neutral-800 p-4">
@@ -278,26 +326,19 @@ export default function ArtworkDetail() {
 
             <div className="mt-3 flex gap-2">
               {!isOwner && (
-                <button
-                  className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
-                  disabled={!canBuy}
-                  onClick={handleBuyClick}
-                >
+                <button className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
+                  disabled={!canBuy} onClick={handleBuyClick}>
                   Buy now
                 </button>
               )}
               {isOwner && !listingId && (
-                <button
-                  className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
-                  onClick={ownerListForSaleUSD}
-                >
-                  List for sale (USD)
+                <button className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
+                  onClick={ownerListForSaleUSD}>
+                  List for sale
                 </button>
               )}
-              <button
-                className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
-                onClick={() => setShowOffer(true)}
-              >
+              <button className="rounded-xl border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-900"
+                onClick={() => setShowOffer(true)}>
                 Make offer
               </button>
             </div>
@@ -309,11 +350,9 @@ export default function ArtworkDetail() {
           {/* Tabs */}
           <div className="mt-6 flex gap-2">
             {(["details", "activity"] as const).map((t) => (
-              <button
-                key={t}
+              <button key={t}
                 className={`rounded-full border px-3 py-1 text-sm capitalize ${tab === t ? "border-neutral-500" : "border-neutral-800 hover:bg-neutral-900"}`}
-                onClick={() => setTab(t)}
-              >
+                onClick={() => setTab(t)}>
                 {t}
               </button>
             ))}
@@ -415,11 +454,11 @@ export default function ArtworkDetail() {
           onClose={() => setShowCheckout(false)}
           onPurchased={refetchAll}
           artworkId={art.id}
-          listingId={listingId || ""}
+          listingId={(listing?.listing_id || listing?.id || "") as string}
           title={title}
           price={String(currentPrice)}
           currency={currentCurrency}
-          imageUrl={imageCandidates[imgIdx] || poster}
+          imageUrl={(imageCandidates[imgIdx] || poster)}
         />
       )}
       {showOffer && (

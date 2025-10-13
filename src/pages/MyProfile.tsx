@@ -81,7 +81,9 @@ export default function MyProfile() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useSearchParams();
-  const tab = (search.get("tab") || "artworks") as "artworks" | "likes" | "collections" | "activity";
+  const rawTab = (search.get("tab") || "owned") as "owned" | "artworks" | "likes" | "collections" | "activity";
+  // Back-compat: treat ?tab=artworks as "owned"
+  const tab = (rawTab === "artworks" ? "owned" : rawTab) as "owned" | "likes" | "collections" | "activity";
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
@@ -301,7 +303,7 @@ export default function MyProfile() {
           </div>
 
           <div className="flex gap-2">
-            {(["artworks","likes","collections","activity"] as const).map((t) => (
+            {(["owned","likes","collections","activity"] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -329,7 +331,7 @@ export default function MyProfile() {
 
       {/* Main */}
       <div className="mx-auto max-w-6xl px-4 py-8">
-        {tab === "artworks" && (
+        {tab === "owned" && (
           <>
             <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
               {artworks.map((a) => {
